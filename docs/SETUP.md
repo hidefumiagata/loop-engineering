@@ -261,6 +261,8 @@ Issue を1件作る（用途: 合議）。例:
       `propose(#n): claude の案（他案取得前の単独コミット）` が単独で先にあること
 - [ ] `evaluations/by-claude.json` `by-gemini.json` `by-openai.json` が揃っている
 - [ ] `scores.json` の `generated_by` が `loop/bin/aggregate.mjs` である
+- [ ] `scores.json` に `winner` と `winner_excl_self`（自己採点除外の首位）の両方がある
+      食い違っている場合、`decision.md` に両方の順位が並記されていること
 - [ ] `decision.md` の数値が `scores.json` と一致している
 - [ ] `decision.md` に「不採用案から拾うべき要素」「保存すべき反対意見」「この合議の限界」がある
 - [ ] `scores.json` の `warnings` が `decision.md` に全件転記されている
@@ -306,6 +308,7 @@ Issue を1件作る（用途: 合議）。例:
 | 状態コメントが増殖した | 手で古い方を削除する。`issue-state.mjs` はマーカーを含む最初のコメントを正とする |
 | `/schedule` が Unknown command | claude.ai サブスクでログインしているか確認する（`ANTHROPIC_API_KEY` が環境にあると優先されてしまう） |
 | 日次上限に達した | スキップされた run は**翌日に繰り越されない**。cron 回数を減らすか Max を検討する |
+| Issue を作った直後の Run now が「対象なし」で終わる | `gh issue list --label` が引く GitHub のラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
 
 ## プランを Max に上げたとき
 

@@ -85,7 +85,9 @@ updated: <YYYY-MM-DD>
 （scores.json の首位案。ラベルと著者と総合点を明記）
 
 ## スコア表
-（scores.json から転記。案 × 基準の平均点、評価者ごとの点、ばらつき）
+（scores.json から転記。案 × 基準の平均点、評価者ごとの点、ばらつき。
+  `weighted_score` と `weighted_score_excl_self`（著者自身の採点を除いた点）の**両方**を列に持つ。
+  `winner` と `winner_excl_self` が違う場合は、その事実を表の直下に明記する）
 
 ## 推奨理由
 （点数の羅列ではなく、どの基準でどう差がついたのかを質的に説明する）

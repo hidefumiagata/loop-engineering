@@ -218,3 +218,67 @@ test('scores.json は自分が機械出力であることを明示する', () =>
   assert.equal(r.generated_by, 'loop/bin/aggregate.mjs');
   assert.match(r.note, /書き換えません/);
 });
+
+test('自己採点を除いた点を案ごとに併記する', () => {
+  // claude が自案 B を 5、他案を 2 にして首位を取る構図。
+  // 自己採点を除くと B は gemini/openai の 3 点だけになり、A(4,4の平均4) が上に来る。
+  const r = aggregate({
+    criteria: CRITERIA,
+    authors: { A: 'gemini', B: 'claude', C: 'openai' },
+    evaluations: [
+      { evaluator: 'claude', data: evaluation([flat('A', 2), flat('B', 5), flat('C', 2)]) },
+      { evaluator: 'gemini', data: evaluation([flat('A', 4), flat('B', 3), flat('C', 3)]) },
+      { evaluator: 'openai', data: evaluation([flat('A', 4), flat('B', 3), flat('C', 2)]) },
+    ],
+  });
+
+  const byLabel = Object.fromEntries(r.proposals.map((p) => [p.label, p]));
+  // B の総合は (5+3+3)/3 = 3.667、自己採点を除くと (3+3)/2 = 3
+  assert.equal(byLabel.B.weighted_score, 3.667);
+  assert.equal(byLabel.B.weighted_score_excl_self, 3);
+  // A の総合は (2+4+4)/3 = 3.333、自己採点(gemini)を除くと (2+4)/2 = 3
+  assert.equal(byLabel.A.weighted_score_excl_self, 3);
+
+  assert.equal(r.winner.label, 'B', '総合では自己採点込みで B が首位');
+  assert.ok(r.winner_excl_self, '自己採点を除いた首位も出す');
+});
+
+test('自己採点を除くと首位が入れ替わるケースを検出して警告する', () => {
+  // claude が自案 B を 5、A を 1 にして B を首位に押し上げる構図。
+  // 一方 A の著者 gemini は自案を特に優遇しておらず、第三者 openai は A を上と見ている。
+  const r = aggregate({
+    criteria: CRITERIA,
+    authors: { A: 'gemini', B: 'claude' },
+    evaluations: [
+      { evaluator: 'claude', data: evaluation([flat('A', 1), flat('B', 5)]) },
+      { evaluator: 'gemini', data: evaluation([flat('A', 3), flat('B', 3)]) },
+      { evaluator: 'openai', data: evaluation([flat('A', 5), flat('B', 2)]) },
+    ],
+  });
+
+  // 総合: A=(1+3+5)/3=3.0 / B=(5+3+2)/3=3.333 → 首位は B
+  assert.equal(r.winner.label, 'B');
+  assert.equal(r.winner.weighted_score, 3.333);
+
+  // 自己採点除外: A は gemini を除いて (1+5)/2=3.0 / B は claude を除いて (3+2)/2=2.5
+  //            → 首位が A に入れ替わる
+  assert.equal(r.winner_excl_self.label, 'A');
+  assert.equal(r.winner_excl_self.weighted_score_excl_self, 3);
+
+  assert.ok(
+    r.warnings.some((w) => w.includes('自己採点を除くと首位が') && w.includes('B') && w.includes('A')),
+    '首位が入れ替わることを警告する。警告だけでは順位が動かないため、両方の順位を出すのが目的',
+  );
+});
+
+test('著者不明の案は自己採点除外の対象にしない', () => {
+  const r = aggregate({
+    criteria: CRITERIA,
+    authors: {},   // 対応表が無い
+    evaluations: [{ evaluator: 'claude', data: evaluation([flat('A', 4), flat('B', 2)]) }],
+  });
+  // 誰の案か分からないので除外は起きず、総合と同じ値になる
+  const a = r.proposals.find((p) => p.label === 'A');
+  assert.equal(a.weighted_score_excl_self, a.weighted_score);
+  assert.equal(r.self_score_bias.length, 0);
+});

@@ -150,6 +150,7 @@ Claude はオーケストレータ兼参加者なので、他案を見てから�
 | `weighted_score` | 基準の重み付き平均を評価者間で平均した総合点 |
 | `by_evaluator` / `inter_evaluator_spread` | 評価者ごとの点とばらつき。1人だけ極端な評価をしていないか |
 | `self_score_bias` | 自案につけた点 − 他案の平均。0.75 超で警告 |
+| `weighted_score_excl_self` / `winner_excl_self` | **著者自身の採点を除いた点と順位。** 警告だけでは順位が動かないので、別系統の順位として並べて出す。総合首位と入れ替わる場合は警告する |
 | `agreement.kendall_w` | 評価者間の順位一致度。0.5 未満で警告（評価階層の引き上げを検討） |
 | `agreement.top_pick_unanimous` | 首位が全評価者で一致しているか |
 | `winner.margin` | 首位と次点の差。0.25 未満で「スコアだけで決めるな」と警告 |

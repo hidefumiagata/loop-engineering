@@ -127,10 +127,15 @@ export function aggregate({ criteria, authors, evaluations }) {
     }
 
     const vals = Object.values(byEvaluator);
+    // 自案への採点を除いた点。自己採点だけで首位になっている案を可視化するために出す。
+    const exclSelf = Object.entries(byEvaluator)
+      .filter(([ev]) => authors?.[label] !== ev)
+      .map(([, v]) => v);
     return {
       label,
       author: authors?.[label] ?? null,
       weighted_score: round(mean(vals)),
+      weighted_score_excl_self: exclSelf.length ? round(mean(exclSelf)) : null,
       by_evaluator: byEvaluator,
       inter_evaluator_spread: vals.length ? round(Math.max(...vals) - Math.min(...vals)) : null,
       by_criterion: byCriterion,
@@ -190,6 +195,30 @@ export function aggregate({ criteria, authors, evaluations }) {
     warnings.push(`首位と次点の差が ${winner.margin} 点しかありません。スコアだけで決めず、decision.md で質的な根拠を示してください。`);
   }
 
+  // 自己採点を除いた順位。自案への点だけで首位になっている案を検出する。
+  // 警告するだけでは順位が動かないので、別の順位として並べて出す。
+  const rankedExclSelf = proposals
+    .filter((p) => typeof p.weighted_score_excl_self === 'number')
+    .sort((a, b) => b.weighted_score_excl_self - a.weighted_score_excl_self);
+  const winnerExclSelf = rankedExclSelf[0]
+    ? {
+        label: rankedExclSelf[0].label,
+        author: rankedExclSelf[0].author,
+        weighted_score_excl_self: rankedExclSelf[0].weighted_score_excl_self,
+        margin: rankedExclSelf[1]
+          ? round(rankedExclSelf[0].weighted_score_excl_self - rankedExclSelf[1].weighted_score_excl_self)
+          : null,
+      }
+    : null;
+  if (winner && winnerExclSelf && winner.label !== winnerExclSelf.label) {
+    warnings.push(
+      `自己採点を除くと首位が ${winner.label}(${winner.author}) から `
+      + `${winnerExclSelf.label}(${winnerExclSelf.author}) に入れ替わります。`
+      + `${winner.label} は著者自身の採点で首位になっています。decision.md では両方の順位を示し、`
+      + `どちらを採るかの判断根拠を質的に説明してください。`,
+    );
+  }
+
   // どの案も満たせていない基準
   const unmetCriteria = criterionIds
     .map((id) => ({ id, weight: weightOf[id], best_mean: round(Math.max(...proposals.map((p) => p.by_criterion[id]?.mean ?? 0))) }))
@@ -207,6 +236,7 @@ export function aggregate({ criteria, authors, evaluations }) {
     evaluators,
     proposals,
     winner,
+    winner_excl_self: winnerExclSelf,
     self_score_bias: selfScoreBias,
     agreement,
     unmet_criteria: unmetCriteria,
@@ -255,7 +285,11 @@ function main() {
 
   process.stderr.write(`[ok] ${out}\n`);
   for (const p of result.proposals) {
-    process.stderr.write(`  ${p.rank}. ${p.label} (${p.author ?? '著者不明'}) = ${p.weighted_score}/5  ばらつき ${p.inter_evaluator_spread}\n`);
+    const excl = typeof p.weighted_score_excl_self === 'number' ? ` 自己採点除外 ${p.weighted_score_excl_self}` : '';
+    process.stderr.write(`  ${p.rank}. ${p.label} (${p.author ?? '著者不明'}) = ${p.weighted_score}/5${excl}  ばらつき ${p.inter_evaluator_spread}\n`);
+  }
+  if (result.winner_excl_self && result.winner?.label !== result.winner_excl_self.label) {
+    process.stderr.write(`  自己採点を除いた首位: ${result.winner_excl_self.label} (${result.winner_excl_self.author})\n`);
   }
   process.stderr.write(`  一致度 Kendall W=${result.agreement.kendall_w} 首位一致=${result.agreement.top_pick_unanimous}\n`);
   for (const w of result.warnings) process.stderr.write(`  [warn] ${w}\n`);

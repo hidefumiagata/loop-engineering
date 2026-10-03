@@ -41,6 +41,11 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 `list` が空なら、**何もせずに終了する**。Issue も作らない。
 「対象 Issue なし」とだけ標準出力に書く。
 
+> `gh issue list --label` は GitHub のラベル検索インデックスを引くため、
+> **作成直後やラベル付与直後の Issue は数十秒〜数分のあいだ出てこないことがある**（実測で確認）。
+> 空振りしても異常ではない。Issue を作ったりリトライループを組んだりせず、素直に終了する。
+> 次の run で拾われる。
+
 ## Step 1. 対象 Issue の選定
 
 `list` の先頭（最終更新が最も古いもの）を取る。これがラウンドロビンになり、
@@ -272,6 +277,10 @@ node loop/bin/issue-state.mjs read <issue>
 
    加えて「集計上の注意」に `scores.json` の `warnings` を**そのまま全件**列挙する。
    自己採点バイアスや一致度の低さを隠してはならない。
+
+   **`winner` と `winner_excl_self` が食い違っている場合は、スコア表に両方の順位を並べて示す。**
+   総合首位が著者自身の採点で押し上げられている状態なので、どちらを推奨するかの判断根拠を
+   質的に説明する（点数の再計算で押し通してはならない）。
 4. commit & push。Issue にスコア表と推奨案、そして `warnings` を投稿する。
 5. 状態を `phase: handoff`、`awaiting_human: true` にし、`loop:needs-human` を付ける。
    **ここで必ず停止する。合議の結論を自動で確定させてはならない。**
