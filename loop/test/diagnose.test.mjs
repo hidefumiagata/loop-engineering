@@ -96,3 +96,25 @@ test('認可エラーだが本文が未知なら、一般的な案内を返す',
   assert.match(d, /HTTP 403/);
   assert.match(d, /API credentials/);
 });
+
+test('モデル名が存在しないときは doctor --models へ誘導する', () => {
+  // 2026-10-03 の run で Gemini が実際に返した本文
+  const body = JSON.stringify({
+    error: {
+      code: 404,
+      message: 'models/gemini-3.1-pro is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.',
+      status: 'NOT_FOUND',
+    },
+  });
+  const d = diagnose(res(404), body, GEMINI, 'proxy');
+  assert.match(d, /モデルがプロバイダに存在しません/);
+  assert.match(d, /doctor\.mjs --models/, '実在するモデル名を列挙する手段を示す');
+  assert.match(d, /推測で書き直すと/, '推測で直させない');
+  assert.doesNotMatch(d, /API credentials/, '認証の問題ではないので credential 画面に誘導しない');
+});
+
+test('OpenAI のモデル不在も同じ診断になる', () => {
+  const body = JSON.stringify({ error: { message: 'The model `gpt-5.2` does not exist or you do not have access to it.', type: 'invalid_request_error' } });
+  const d = diagnose(res(404), body, OPENAI, 'proxy');
+  assert.match(d, /doctor\.mjs --models/);
+});

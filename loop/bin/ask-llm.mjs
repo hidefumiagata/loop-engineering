@@ -234,6 +234,14 @@ export function diagnose(res, bodyText, provider, authMode) {
     return `[診断] x-deny-reason=${deny} — リクエストが Anthropic のプロキシでブロックされ、`
       + 'プロバイダに届いていません。loop-env の Network access（Full か、該当ホストを含む Custom）を確認してください。';
   }
+  // モデル名が存在しない。資料や記憶から書くと外れるので、プロバイダ自身に聞かせる。
+  if (res.status === 404 || /is not found for API version|model.*does not exist|unknown model/i.test(bodyText)) {
+    return '[診断] 指定したモデルがプロバイダに存在しません。'
+      + '`node loop/bin/doctor.mjs --models` を実行すると実際に使えるモデル名が一覧されるので、'
+      + 'そこから選んで loop/config.json の providers.*.tiers.*.model を直してください。'
+      + '推測で書き直すと同じ失敗を繰り返します。';
+  }
+
   if (res.status !== 401 && res.status !== 403) return null;
 
   const body = bodyText.toLowerCase();
