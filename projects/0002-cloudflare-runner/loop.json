@@ -1,1 +1,1 @@
-{"issue":2,"usecase":"research","mode":"pipeline","slug":"0002-cloudflare-runner","branch":"claude/loop-2-cloudflare-runner","pr":null,"phase":"blocked","iteration":0,"max_iterations":5}
+{"issue":2,"usecase":"research","mode":"pipeline","slug":"0002-cloudflare-runner","branch":"claude/loop-2-cloudflare-runner","pr":3,"phase":"done","iteration":1,"max_iterations":5,"awaiting_human":false,"updated_at":"2026-10-03T14:37:56Z"}
