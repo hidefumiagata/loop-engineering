@@ -54,7 +54,7 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 
 | granularity | 1 run でやること |
 | --- | --- |
-| `iteration` (Pro 既定) | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→aggregate→decide |
+| `iteration` (Pro 既定) | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→synthesize→critique |
 | `phase` (Max 向け) | フェーズを1つだけ実行して終える |
 
 `list` が空なら、**何もせずに終了する**。Issue も作らない。リトライループも組まない。
@@ -326,9 +326,12 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 3. Claude 自身も `evaluator.md` に従い、**同じスキーマで**採点して
    `projects/<slug>/evaluations/by-claude.json` に書く。自分の案も採点する
    （自己採点バイアスは `aggregate.mjs` が測るので、避けずに採点してよい）。
-4. 状態を `phase: decide` にする。
+4. 状態を `phase: synthesize` にする。
 
-### phase: decide（aggregate を含む）
+### phase: synthesize（aggregate を含む。**ここが成果物**）
+
+**案を選ぶのではない。3案を読んで答えを作り直す。**
+「案Bを推奨する」は答えではない。読者が知りたいのはテーマへの答えであって、どの案が勝ったかではない。
 
 1. 集計する。**出力を手で触らない:**
    ```bash
@@ -338,44 +341,57 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    `panel_round < config.defaults.max_panel_rounds` なら:
    - ギャップを `brief.md` の「前提事実」に追記する
    - `panel_round` を +1 し `phase: propose` に戻す（`proposals/` と `evaluations/` は退避して作り直す）
-   - Issue に「どの基準も満たせなかったためラウンド2に入る」と書く
-3. そうでなければ `decision.md` を書く。deliberation.md の構成に厳密に従い、
-   **以下4節を省略してはならない:**
-   - **各案の要旨** — 人間はここだけを読んで決める。スコアと推奨だけでは判断できない。
-     案ごとに「何をする案か」「他案との違い」「犠牲にしているもの」を書く。
-     ファイルへのリンクだけで済ませてはならない（作業ブランチ上のファイルは読まれない）
-   - 不採用案から拾うべき要素
-   - 保存すべき反対意見
-   - この合議の限界（他社2者が環境に触れていないこと）
+   - Issue に「どの基準も満たせなかったためラウンド2に入る」と書いて、この run を終える
+3. そうでなければ `loop/prompts/roles/synthesizer.md` に従い
+   `answer.md` と `provenance.json` を書く。構成は deliberation.md の `answer.md` 節に厳密に従う。
+   **以下5節を省略してはならない:**
+   - **答え**（結論を先に）／**本論**
+   - **3者が一致した点** — 独立した3モデルが同じ結論に達した部分。最も確度が高い
+   - **見解が割れた点** — 空にしてはならない。無理に一本化しない
+   - **取り込まなかった要素** — なぜ不要と判断したか。黙って落とすのが最も疑わしい
+   - **この答えの限界** — `scores.json` と `synthesis-check.json` の `warnings` を全件列挙する
+4. **自案への偏りを機械的に確認する:**
+   ```bash
+   node loop/bin/synthesis-check.mjs --dir projects/<slug>
+   ```
+   **偏りが警告されたら `answer.md` を書き直す。** 言い訳を添えて通してはならない。
+   `synthesis-check.json` は手で編集しない。
+5. commit & push。状態を `phase: critique` にする。
 
-   加えて「集計上の注意」に `scores.json` の `warnings` を**そのまま全件**列挙する。
-   自己採点バイアスや一致度の低さを隠してはならない。
+### phase: critique（他の2者に検品させる）
 
-   **`winner` と `winner_excl_self` が食い違っている場合は、スコア表に両方の順位を並べて示す。**
-   総合首位が著者自身の採点で押し上げられている状態なので、どちらを推奨するかの判断根拠を
-   質的に説明する（点数の再計算で押し通してはならない）。
-4. commit & push。Issue には **`decision.md` の「各案の要旨」節をそのまま貼る**。
-   そのうえでスコア表・推奨案・`warnings` を載せる。
-   **人間は Issue しか見ないつもりで書くこと。** 作業ブランチ上のファイルを開かせてはならない。
-5. 状態を `phase: handoff`、`awaiting_human: true` にし、`loop:needs-human` を付ける。
-   **ここで必ず停止する。合議の結論を自動で確定させてはならない。**
+統合役は参加者でもある。自分で書いた答えを自分で検品しても意味がない。
 
-### phase: handoff（人間の確定を受けて引き継ぐ）
+1. パケットを作る: `brief.md` + `answer.md` + `provenance.json`。
+   **`.authors.json` は渡さない。**
+2. `config.usecases.<usecase>.critics` の各者を呼ぶ:
+   ```bash
+   node loop/bin/ask-llm.mjs --spec gemini:review --system loop/prompts/roles/critic.md \
+     --input /tmp/critique-packet.md --schema verdict \
+     --out projects/<slug>/journal/NNN-critique-gemini.json
+   node loop/bin/ask-llm.mjs --spec openai:evaluate --system loop/prompts/roles/critic.md \
+     --input /tmp/critique-packet.md --schema verdict \
+     --out projects/<slug>/journal/NNN-critique-openai.json
+   ```
+3. 判定に従う。
 
-このフェーズに入るのは、Issue に `loop:go` が付いている場合だけ
-（`issue-state.mjs list` が `loop:needs-human` を `loop:go` 無しでは除外する）。
+| 批評の結果 | 対応 |
+| --- | --- |
+| 全員 `PASS` | 完了。下記の終了処理へ |
+| いずれかが `REVISE` | `gaps` を反映して `answer.md` を直し、**同じラウンド内で1回だけ**再批評する。2回目も `REVISE` なら、残った指摘を「この答えの限界」に書いて完了にする（無限に回さない） |
+| いずれかが `BLOCKED` | 素材が足りない。ギャップを `brief.md` に追記し `panel_round` を +1 して `phase: propose` へ（上限まで） |
+| 429/5xx で取得できない | **停止しない。** 取得できなかった事実を「この答えの限界」に明記して完了にする。提案と違い、批評の欠落は答えを無効にしない |
 
-```bash
-node loop/bin/issue-state.mjs decision <issue>
-```
+4. 終了処理:
+   - `phase: done`、`loop:done`
+   - **Issue に `answer.md` の全文を投稿する。** 読者は Issue しか見ないつもりで書くこと。
+     作業ブランチ上のファイルを開かせてはならない
+   - PR は作らなくてよい（実装への引き継ぎが無いため）。
+     ブランチに push した状態で完了とし、Issue 本文が成果物になる
 
-- `/decide <ラベル>` が取れたら、そのラベルの案を `plan.md` に落とす。
-  採用案の「設計」を受入基準に翻訳し（`planner.md` の条件を満たす形で）、
-  `decision.md` の `decided_by` を実行者名に更新する。
-  状態を `mode: pipeline`、`phase: work`、`iteration: 1`、`usecase` は Issue のラベルに応じて
-  `build` か `research` に切り替える。`loop:go` と `loop:needs-human` を外す。
-- 取れなければ、Issue に「`/decide <ラベル>` の形でコメントしてください」と書き、
-  `loop:go` を外して `loop:needs-human` のまま終える。
+**`require_human_decision` は `false`。承認待ちで止めない。**
+人間が追加の論点や反証を Issue にコメントし `loop:go` を付けたら、
+次の run がそれを `brief.md` の「前提事実」に取り込んで `propose` からやり直す。
 
 ---
 

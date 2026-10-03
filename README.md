@@ -24,7 +24,11 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 
 アーキテクチャ検討のように「正解が1つに決まらないが、決めなければ進めない」課題。
 
-Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿名で採点し、機械集計した結果を人間が確定**させる。
+Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿名で採点し、
+それを全部読んだ Claude が1つの答えに統合する**。最後に他の2者がその答えを批評する。
+
+**どれを採るかを人間に選ばせる仕組みではない。** 成果物は統合された答えそのもので、
+読めば終わる。実装への引き継ぎもない。
 
 公平性のために埋め込んでいる仕組み:
 
@@ -34,8 +38,12 @@ Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿�
 - **提案は匿名化し、提示順を評価者ごとにシャッフルする**
 - **集計は `loop/bin/aggregate.mjs` が機械的に行う。** Claude は `scores.json` を参照のみ。
   自己採点バイアスと評価者間一致度も自動で測る
-- **反対意見と限界を `decision.md` に必ず残す**
-- **結論は人間が `/decide <ラベル>` で確定させる。** 自動では確定しない
+- **統合答案の寄与比率を `loop/bin/synthesis-check.mjs` が機械的に算出する。**
+  Claude は3案のうち1つを自分で書いているため、統合が「自案に飾りを付けただけ」に
+  なっていないかを外から検証できるようにしている。偏れば警告が出る
+- **統合答案は他の2者が批評する。** 自分の答えを自分で検品させない。
+  批評者が最も見るのは「統合によって失われたもの」
+- **見解が割れた点・取り込まなかった要素・限界を `answer.md` に必ず残す**
 
 ## 使い方
 
@@ -49,7 +57,7 @@ Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿�
 
 | 状況 | すること |
 | --- | --- |
-| 合議の結論が出た | `decision.md` を読み、`/decide <ラベル>` とコメントして `loop:go` を付ける |
+| 合議の答えに異論・追加論点がある | Issue にコメントして `loop:go` を付ける。次の run がそれを前提事実に取り込んで議論をやり直す（任意。何もしなくてよい） |
 | 反復上限に達した | 受入基準か目的を見直して Issue を編集し、`loop:go` を付ける |
 | 設定の問題で止まった | Issue コメントの診断に従う（多くは `loop-env` の credential） |
 
@@ -59,10 +67,11 @@ Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿�
 .claude/skills/loop-engine/SKILL.md   ループ手順の唯一の定義。routine はこれを読む
 loop/
   config.json      プラン別プリセット・モデル階層・用途ごとのモード定義
-  prompts/roles/      planner worker reviewer proposer evaluator
+  prompts/roles/      planner worker reviewer proposer evaluator synthesizer critic
   prompts/usecases/   research build ideation deliberation
   bin/ask-llm.mjs     他社LLM の REST アダプタ（依存ゼロ）
   bin/aggregate.mjs   合議スコアの機械集計（純関数）
+  bin/synthesis-check.mjs 統合答案の寄与比率を算出し自案への偏りを検出（純関数）
   bin/issue-state.mjs Issue コメントへの状態の読み書き
   test/               aggregate / issue-state / 設定整合性(wiring) のテスト
 projects/<Issue番号>-<スラグ>/          成果物と過程の記録
@@ -90,7 +99,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、50件）
+npm test                      # ユニットテスト（キー不要、67件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 

@@ -83,7 +83,10 @@ export function repoSlug() {
 const REQUIRED = ['issue', 'usecase', 'mode', 'slug', 'branch', 'phase', 'iteration', 'max_iterations'];
 const PHASES = {
   pipeline: ['plan', 'work', 'review', 'done', 'blocked'],
-  panel: ['brief', 'propose', 'evaluate', 'decide', 'handoff', 'done', 'blocked'],
+  // panel は「案を選ぶ」のではなく「3案を読んで答えを作る」。
+  // synthesize で Claude が答えを書き、critique で他2者が検品する。
+  // 実装への引き継ぎは無いので handoff / decide は存在しない。
+  panel: ['brief', 'propose', 'evaluate', 'synthesize', 'critique', 'done', 'blocked'],
 };
 
 export function validateState(s) {
