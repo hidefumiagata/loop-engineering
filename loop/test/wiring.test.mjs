@@ -215,16 +215,30 @@ test('SKILL.md が jq に依存していない（サンドボックスに保証�
   assert.doesNotMatch(SKILL, /\bjq\b\s+-/, 'SKILL.md が jq を使っている。node -e で読むこと');
 });
 
-test('panel 用途は人間の確定を必須にしている', () => {
+test('panel 用途は3者の案と、統合答案への外部批評を備えている', () => {
   for (const [name, uc] of Object.entries(config.usecases)) {
     if (uc.mode !== 'panel') continue;
-    assert.equal(uc.require_human_decision, true, `${name} は panel なので require_human_decision が必須`);
+
     assert.ok(uc.proposers?.length >= 3, `${name} の proposers が3者未満`);
     assert.ok(uc.evaluators?.length >= 3, `${name} の evaluators が3者未満`);
     assert.equal(uc.min_proposers, 3, `${name}.min_proposers は 3 でなければならない`);
+
     // 提案者と評価者に Claude 以外が2者以上いること（別モデルによる採点の担保）
-    const external = (uc.evaluators ?? []).filter((e) => e !== 'claude');
-    assert.ok(external.length >= 2, `${name} の外部評価者が2者未満。合議として成立しない`);
+    const externalEval = (uc.evaluators ?? []).filter((e) => e !== 'claude');
+    assert.ok(externalEval.length >= 2, `${name} の外部評価者が2者未満。合議として成立しない`);
+
+    // 統合役は3案のうち1つを自分で書いている。自分の答えを自分で検品させてはならない。
+    assert.equal(uc.synthesizer, 'claude', `${name}.synthesizer は claude（唯一ファイルを扱える参加者）`);
+    const critics = uc.critics ?? [];
+    assert.ok(critics.length >= 2, `${name} の統合答案に対する外部批評者が2者未満`);
+    assert.ok(!critics.includes(uc.synthesizer),
+      `${name} の critics に統合役が含まれている。自分の答えを自分で検品しても意味がない`);
+    for (const c of critics) assert.doesNotThrow(() => resolveTier(c, config), `critic ${c} が解決できない`);
+
+    // 成果物は答えそのもの。実装への引き継ぎは無いので承認待ちで止めない。
+    assert.equal(uc.require_human_decision, false,
+      `${name} は答えを出して完了する用途。承認待ちで止める設計ではない`);
+    assert.equal(uc.deliverable, 'answer.md');
   }
 });
 

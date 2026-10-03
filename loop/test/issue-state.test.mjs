@@ -78,7 +78,11 @@ test('mode と phase の組み合わせを検証する', () => {
   assert.throws(() => validateState({ ...panelState, phase: 'work' }), /phase=work は不正/);
   // 正しい組み合わせは通る
   assert.doesNotThrow(() => validateState({ ...pipelineState, phase: 'work' }));
-  assert.doesNotThrow(() => validateState({ ...panelState, phase: 'decide' }));
+  assert.doesNotThrow(() => validateState({ ...panelState, phase: 'synthesize' }));
+  assert.doesNotThrow(() => validateState({ ...panelState, phase: 'critique' }));
+  // panel は答えを作って終わる。実装への引き継ぎが無いので handoff / decide は存在しない
+  assert.throws(() => validateState({ ...panelState, phase: 'handoff' }), /phase=handoff は不正/);
+  assert.throws(() => validateState({ ...panelState, phase: 'decide' }), /phase=decide は不正/);
 });
 
 test('未知の mode を弾く', () => {

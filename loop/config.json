@@ -115,7 +115,7 @@
     "deliberation": {
       "mode": "panel",
       "label": "use:deliberation",
-      "deliverable": "decision.md",
+      "deliverable": "answer.md",
       "proposers": [
         "claude",
         "gemini:propose",
@@ -128,7 +128,13 @@
       ],
       "planner_critic": "gemini:review",
       "min_proposers": 3,
-      "require_human_decision": true
+      "require_human_decision": false,
+      "synthesizer": "claude",
+      "critics": [
+        "gemini:review",
+        "openai:evaluate"
+      ],
+      "$comment": "選択ではなく統合。3者の案と相互評価を読んで Claude が答えを書き、他2者が批評する"
     }
   }
 }
