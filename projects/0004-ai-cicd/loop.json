@@ -1,2 +1,2 @@
-{"issue":4,"mode":"panel","usecase":"deliberation","phase":"propose","iteration":1,"panel_round":1,"max_iterations":5,"slug":"0004-ai-cicd","branch":"claude/loop-4-ai-cicd","pr":null,"awaiting_human":false,
-"history":[{"n":1,"kind":"brief","by":"claude","at":"2026-10-03","cost_usd":0.0008}]}
+{"issue":4,"mode":"panel","usecase":"deliberation","phase":"propose","iteration":1,"panel_round":1,"max_iterations":5,"slug":"0004-ai-cicd","branch":"claude/loop-4-ai-cicd","pr":null,"awaiting_human":true,
+"history":[{"n":1,"kind":"brief","by":"claude","at":"2026-10-03","cost_usd":0.0008},{"n":2,"kind":"propose-blocked","by":"claude","at":"2026-10-03"}]}
