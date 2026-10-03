@@ -1,0 +1,14 @@
+{
+  "provider": "openai",
+  "tier": "evaluate",
+  "model": "gpt-5-mini",
+  "schema": "verdict",
+  "usage": {
+    "input_tokens": 9318,
+    "output_tokens": 2432
+  },
+  "cost_usd": 0.007194,
+  "truncated": false,
+  "dry_run": false,
+  "at": "2026-10-03T16:28:10.678Z"
+}
