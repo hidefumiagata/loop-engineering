@@ -21,6 +21,25 @@ routine の保存プロンプトは「このファイルを読んで従え」と
    黙って終わる run は、次の run から見て「何が起きたか分からない」状態を作る。
 6. **`LOOP_DRY_RUN=1` のときは push・コメント投稿・ラベル変更・他社LLM呼び出しを一切行わない。**
    代わりに「何をするつもりか」を順に標準出力に書いて終わる。
+7. **GitHub の操作は REST だけを使う。** このクラウドセッションからは **GitHub GraphQL が 403 で拒否される**
+   （実測。`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`）。
+   `gh` の `--json` 系サブコマンドは GraphQL を使うため **すべて動かない**。下表の左を使ってはならない。
+
+<!-- graphql-forbidden-table:start — この表は「使ってはいけないもの」の一覧なので、wiring テストの検出対象から外す -->
+| 使えない（GraphQL） | 代わりに使うもの |
+| --- | --- |
+| `gh repo view --json` | `node loop/bin/issue-state.mjs` が `git remote` から導出する。自分で呼ぶ必要はない |
+| `gh issue list --json` | `node loop/bin/issue-state.mjs list` |
+| `gh issue view --json` | `gh api repos/{repo}/issues/{n}` |
+| `gh issue edit --add-label` | `node loop/bin/issue-state.mjs sync-phase` / `labels` |
+| `gh issue comment` | `node loop/bin/issue-state.mjs comment` |
+| `gh label list` | `gh api repos/{repo}/labels` |
+| `gh pr create` | `gh api -X POST repos/{repo}/pulls`（下記 work フェーズ参照） |
+| `gh pr ready` | **使わない。** draft 解除は GraphQL 専用なので PR は最初から通常PRで作る |
+<!-- graphql-forbidden-table:end -->
+
+GitHub MCP ツールが使える場合でも**使ってはならない。** `loop/bin/*.mjs` は MCP を呼べないため、
+MCP で回避すると「スクリプトでは再現できない手順」になり、次の run が同じ状態から再開できなくなる。
 
 ---
 
@@ -38,13 +57,12 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 | `iteration` (Pro 既定) | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→aggregate→decide |
 | `phase` (Max 向け) | フェーズを1つだけ実行して終える |
 
-`list` が空なら、**何もせずに終了する**。Issue も作らない。
+`list` が空なら、**何もせずに終了する**。Issue も作らない。リトライループも組まない。
 「対象 Issue なし」とだけ標準出力に書く。
 
-> `gh issue list --label` は GitHub のラベル検索インデックスを引くため、
-> **作成直後やラベル付与直後の Issue は数十秒〜数分のあいだ出てこないことがある**（実測で確認）。
-> 空振りしても異常ではない。Issue を作ったりリトライループを組んだりせず、素直に終了する。
-> 次の run で拾われる。
+> `list` は REST の `/issues?labels=loop` を引く。検索インデックスを経由しないので、
+> 作成直後の Issue もすぐ取得できる。空振りしたなら本当に対象が無い（または
+> `loop:stop` / `loop:done` / `loop:blocked` / `loop:needs-human` で除外されている）。
 
 ## Step 1. 対象 Issue の選定
 
@@ -56,10 +74,13 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 ### 用途の決め方
 
 1. `use:*` ラベルが付いていればそれを使う。複数付いていたら `loop:blocked` にして人間に渡す。
-2. ラベルが無ければ Issue 本文から読む。`.github/ISSUE_TEMPLATE/loop-task.yml` の
-   「用途」ドロップダウンは本文に `### 用途` 節として現れ、値は `技術調査 (research)` のように
-   **括弧内に機械キーを含む**。そのキー（`research` / `build` / `ideation` / `deliberation`）を取る。
-   取れたら **`gh issue edit <issue> --add-label "use:<キー>"` でラベルを付ける**（次回以降は 1. で済む）。
+2. ラベルが無ければ Issue 本文から読む。本文は `gh api repos/{repo}/issues/<issue> --jq .body` で取る。
+   `.github/ISSUE_TEMPLATE/loop-task.yml` の「用途」ドロップダウンは本文に `### 用途` 節として現れ、
+   値は `技術調査 (research)` のように **括弧内に機械キーを含む**。
+   そのキー（`research` / `build` / `ideation` / `deliberation`）を取る。取れたらラベルを付ける:
+   ```bash
+   node loop/bin/issue-state.mjs labels <issue> add "use:<キー>"
+   ```
 3. どちらでも決まらなければ `research` を既定とし、そう判断したことを Issue にコメントする。
 
 `### 最大反復回数` 節があれば先頭の数字を `max_iterations` に使う。無ければ `config.defaults.max_iterations`。
@@ -83,14 +104,21 @@ node loop/bin/issue-state.mjs read <issue>
    英語の短い語を2〜3語作る（例: `0013-agent-arch`）。日本語をそのままディレクトリ名にしない。
 2. ブランチを作る: `claude/loop-<issue>-<slugの後半>`。
    **`claude/` 接頭辞は必須**（これ以外のブランチへの push は Claude Cloud 側で拒否されうる）。
+
+   > **セッションは `main` ではなく、自動生成された `claude/<形容詞>-<名前>` ブランチで始まることがある**（実測）。
+   > そこに成果物を置くと、Issue と成果物の対応が追えなくなる。
+   > だから現在のブランチを確認せず、**無条件に `-B` で設計どおりのブランチへ移る。**
+
    ```bash
-   git fetch origin && git checkout -b claude/loop-<issue>-<name> origin/main
+   git fetch origin
+   git checkout -B claude/loop-<issue>-<name> origin/main
+   git rev-parse --abbrev-ref HEAD    # 設計どおりの名前になっているか必ず確認する
    ```
 3. `projects/<slug>/` を作り、`README.md` に Issue へのリンクと目的を書く。
 4. 状態を書く。`mode` は `config.usecases[usecase].mode`。
    初期 `phase` は pipeline なら `plan`、panel なら `brief`。
    `max_iterations` は Issue 本文に指定があればそれ、無ければ `config.defaults.max_iterations`。
-5. ラベルを `loop:<phase>` に揃える。
+5. フェーズラベルを揃える: `node loop/bin/issue-state.mjs sync-phase <issue> <phase>`
 
 ---
 
@@ -130,12 +158,17 @@ node loop/bin/issue-state.mjs read <issue>
   ```bash
   git add -A && git commit -m "work(#<issue>): <何をしたか>" && git push -u origin HEAD
   ```
-- PR が無ければ draft で作る:
+- PR が無ければ作る。**`gh pr create` は GraphQL なので使えない。REST を使う:**
   ```bash
-  gh pr create --draft --base main --head <branch> \
-    --title "loop(#<issue>): <タイトル>" \
-    --body "Issue #<issue> の自動作業。受入基準は projects/<slug>/plan.md 参照。"
+  REPO=$(node -e "import('./loop/bin/issue-state.mjs').then(m=>console.log(m.repoSlug()))")
+  cat > /tmp/pr.json <<'EOF'
+  { "title": "loop(#<issue>): <タイトル>", "head": "<branch>", "base": "main",
+    "body": "Issue #<issue> の自動作業。受入基準は projects/<slug>/plan.md 参照。\n\nCloses #<issue>" }
+  EOF
+  gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number
   ```
+  **draft では作らない。** draft → ready の解除は GraphQL 専用でクラウドから叩けないため、
+  開いたまま解除できない PR が残ってしまう。完了の signal は `loop:done` ラベルが持つので draft は不要。
   作成した PR 番号を状態の `pr` に入れる。
 - 状態を `phase: review` にする。
 
@@ -164,7 +197,7 @@ node loop/bin/issue-state.mjs read <issue>
 
 | verdict | 次の状態 | ラベル | 追加の操作 |
 | --- | --- | --- | --- |
-| `PASS` | `phase: done` | `loop:done` | `gh pr ready <pr>` で draft を解除 |
+| `PASS` | `phase: done` | `loop:done` | PR に完了コメントを投稿する（draft 解除は不要。最初から通常PR） |
 | `REVISE` | `iteration` を +1 して `phase: work` | `loop:work` | — |
 | `BLOCKED` | `phase: blocked` | `loop:blocked` + `loop:needs-human` | 理由を Issue に書く |
 
@@ -175,11 +208,18 @@ node loop/bin/issue-state.mjs read <issue>
 
 `ask-llm.mjs` が非ゼロ終了した場合の扱いを、エラーの種類で分ける。
 
-| 状況 | 対応 |
-| --- | --- |
-| 429（レート上限） | このフェーズを**実行せずに終える**。状態は変えない。Issue に「Geminiのレート上限により次回に持ち越し」と書く。次の run で再試行される |
-| 403 / `x-deny-reason` | `loop:blocked` + `loop:needs-human`。`loop-env` の Network access と API credentials の設定を疑うよう Issue に書く |
-| それ以外（スキーマ違反・5xx継続など） | Claude 自身がレビューを代行する。**ただし `journal/NNN-review.md` の冒頭を必ず `reviewer: claude (fallback — gemini が <理由> で失敗)` にし、Issue コメントにも同じ断り書きを入れる。** 黙って自己採点してはならない |
+`ask-llm.mjs` は 403/401 を2種類に分けて診断を出す。**エラー本文の `[診断]` 行をそのまま Issue に転記する。**
+
+| 状況 | 見分け方 | 対応 |
+| --- | --- | --- |
+| 429（レート上限） | HTTP 429 | このフェーズを**実行せずに終える**。状態は変えない。Issue に「Geminiのレート上限により次回に持ち越し」と書く。次の run で再試行される |
+| ネットワーク拒否 | `[診断] x-deny-reason=...` | `loop:blocked` + `loop:needs-human`。`loop-env` の **Network access** がホストを許していない。Issue にそう書く |
+| キーが未付与 | `[診断] 認証情報がプロキシで付与されていません` | `loop:blocked` + `loop:needs-human`。リクエストはプロバイダに届いているが**キーが付いていない**。`loop-env` の **API credentials** にそのホストの credential が登録されているか（一覧が `Not sent` になっていないか）を確認するよう Issue に書く |
+| キーが無効 | `[診断] 認証情報が拒否されました` | 同上だが、キー自体が誤っている・期限切れ・ヘッダ指定が違う可能性。Gemini なら Custom header の **Prefix が空になっているか**を確認するよう書く |
+| それ以外（スキーマ違反・5xx継続など） | — | Claude 自身がレビューを代行する。**ただし `journal/NNN-review.md` の冒頭を必ず `reviewer: claude (fallback — gemini が <理由> で失敗)` にし、Issue コメントにも同じ断り書きを入れる。** 黙って自己採点してはならない |
+
+`403` だからといって一律 blocked にしない。上の表で**どちらの 403 か**を見分けてから書く。
+原因の切り分けを間違えると、人間が間違った設定画面を何度も見ることになる。
 
 ---
 
@@ -308,7 +348,13 @@ node loop/bin/issue-state.mjs decision <issue>
 
 ### 4-1. Issue に人間可読のコメントを投稿する
 
-`gh issue comment <issue> --body-file /tmp/run-comment.md`。本文の形:
+`gh issue comment` は GraphQL なので使えない。本文をファイルに書いてから:
+
+```bash
+node loop/bin/issue-state.mjs comment <issue> /tmp/run-comment.md
+```
+
+本文の形:
 
 ```markdown
 ### <フェーズ名> を実行しました — <YYYY-MM-DD HH:MM JST>
@@ -346,11 +392,18 @@ node loop/bin/issue-state.mjs write <issue> /tmp/state.json
 
 ### 4-3. ラベルを状態に合わせる
 
+フェーズラベルの入れ替えは専用コマンドに任せる。`loop` / `use:*` / 制御ラベルには触らない作りになっている。
+
 ```bash
-gh issue edit <issue> --add-label "loop:<phase>" --remove-label "loop:<前のphase>"
+node loop/bin/issue-state.mjs sync-phase <issue> <phase>
 ```
 
-`loop` ラベルと `use:*` ラベルは外さない。
+制御ラベル（`loop:needs-human` / `loop:go` / `loop:stop`）は別に操作する:
+
+```bash
+node loop/bin/issue-state.mjs labels <issue> add    loop:needs-human
+node loop/bin/issue-state.mjs labels <issue> remove loop:go loop:needs-human
+```
 
 ### 4-4. push を確認する
 

@@ -31,6 +31,26 @@ GitHub Issue に目的を書くと Claude Cloud の routine が自律的に作�
 - エラーメッセージには「何が起きたか」と「次に何をすればよいか」を両方書く。
   `ask-llm.mjs` が `x-deny-reason` を設定の指摘に変えているのが基準。
 
+## GitHub の操作は REST だけ
+
+**クラウドセッションからは GitHub GraphQL が 403 で拒否される**（初回 run の実測）。
+
+```
+403 "GitHub GraphQL is not available from Claude Code sessions;
+     use the REST API (gh api repos/{owner}/{repo}/...)"
+```
+
+`gh` の `--json` 系サブコマンド（`gh repo view --json` / `gh issue list` / `gh issue edit` /
+`gh issue comment` / `gh label list` / `gh pr create` / `gh pr ready`）は**すべて動かない**。
+`gh api`（REST）か `loop/bin/issue-state.mjs` のサブコマンドに置き換える。
+`npm test` の wiring テストがこの種の混入を検出するので、追加するときはそこも見ること。
+
+GitHub MCP ツールで回避してはならない。`loop/bin/*.mjs` は MCP を呼べないため、
+MCP に逃げると「スクリプトでは再現できない手順」になり、次の run が同じ状態から再開できなくなる。
+
+draft PR を作らないのも同じ理由。`draft → ready` の遷移は GraphQL 専用で、
+クラウドから解除できない PR が残ってしまう。完了の signal は `loop:done` ラベルが持つ。
+
 ## 他社LLMの呼び出し
 
 必ず `node loop/bin/ask-llm.mjs` 経由。`curl` を直接書かない。

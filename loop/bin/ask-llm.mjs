@@ -141,6 +141,64 @@ function extractOpenAI(json) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 設定起因の失敗を切り分けて、人間が見るべき画面を名指しする診断文を返す。
+ * 直らないものだけを返す（再試行の価値があるエラーには null を返す）。
+ *
+ * 403 には性質の違う3種類があり、区別しないと間違った設定画面を見に行くことになる。
+ *   1. Anthropic プロキシがホストを許可していない → x-deny-reason が付く
+ *   2. プロバイダに到達したがキーが付いていない   → 「身元不明の呼び出し元」系のエラー本文
+ *   3. キーは届いたが無効                         → 「キーが正しくない」系のエラー本文
+ * 初回の実運用では 2 が起き、エラー本文だけでは 1 と区別できず原因究明が遠回りになった。
+ */
+export function diagnose(res, bodyText, provider, authMode) {
+  const deny = res.headers.get('x-deny-reason');
+  if (deny) {
+    return `[診断] x-deny-reason=${deny} — リクエストが Anthropic のプロキシでブロックされ、`
+      + 'プロバイダに届いていません。loop-env の Network access（Full か、該当ホストを含む Custom）を確認してください。';
+  }
+  if (res.status !== 401 && res.status !== 403) return null;
+
+  const body = bodyText.toLowerCase();
+  const header = provider.auth?.header ?? '(未設定)';
+  const where = authMode === 'local-env'
+    ? `ローカル環境変数 ${provider.auth?.local_env} の値`
+    : 'loop-env の API credentials';
+
+  // キーが1つも届いていない
+  const missing = [
+    'unregistered callers',          // Google: Method doesn't allow unregistered callers
+    'without established identity',
+    'missing bearer',                // OpenAI
+    'you didn\'t provide an api key',
+    'no api key provided',
+    'api key not found',
+  ];
+  if (missing.some((s) => body.includes(s))) {
+    return `[診断] 認証情報がプロキシで付与されていません。リクエストはプロバイダに到達していますが、`
+      + `キーが付いていません（ネットワーク設定は正常です）。${where} に、このホスト宛の credential が`
+      + `登録されているか確認してください。ヘッダ名は "${header}" である必要があります。`
+      + '（環境を作成したあと、もう一度開かないと API credentials 欄は現れません。'
+      + '一覧で "Not sent" になっている場合はその下の注記に理由が書かれています。）';
+  }
+
+  // キーは届いたが無効
+  const invalid = [
+    'api key not valid', 'api_key_invalid', 'invalid api key',
+    'incorrect api key', 'invalid_api_key', 'unauthorized',
+  ];
+  if (invalid.some((s) => body.includes(s))) {
+    const prefixHint = provider.auth?.prefix === ''
+      ? ` このプロバイダはキーの生値を "${header}" で受け取ります。credential の Custom header の Prefix が`
+        + '**空**になっているか確認してください（"Bearer" が残っていると失敗します）。'
+      : '';
+    return `[診断] 認証情報が拒否されました。キーはプロバイダに届いていますが受け付けられていません。`
+      + `${where} のキーが有効か、期限切れでないかを確認してください。${prefixHint}`;
+  }
+
+  return `[診断] HTTP ${res.status} の認可エラーです。${where} とプロバイダ側の権限設定を確認してください。`;
+}
+
 export async function askLLM({
   spec, system, input, schema = null, maxOutputTokens = 16000,
   config = loadConfig(), log = (m) => process.stderr.write(m + '\n'),
@@ -203,11 +261,10 @@ export async function askLLM({
     const bodyText = await res.text().catch(() => '');
     lastErr = new Error(`HTTP ${res.status} ${res.statusText}: ${bodyText.slice(0, 500)}`);
 
-    // x-deny-reason はクラウド環境の allowlist / credential 未設定。再試行しても直らない。
-    const deny = res.headers.get('x-deny-reason');
-    if (deny) {
-      lastErr.message += `\n[診断] x-deny-reason=${deny} — loop-env の Network access と API credentials を確認してください。`;
-      break;
+    const diag = diagnose(res, bodyText, provider, mode);
+    if (diag) {
+      lastErr.message += `\n${diag}`;
+      break;   // 設定起因なので再試行しても直らない
     }
     if (!RETRY_STATUS.has(res.status) || attempt === MAX_ATTEMPTS) break;
 

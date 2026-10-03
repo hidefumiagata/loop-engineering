@@ -176,7 +176,7 @@ curl -X POST https://api.anthropic.com/v1/claude_code/routines/<ROUTINE_ID>/fire
 npm test
 ```
 
-37件すべて pass すること。`aggregate.mjs` と `issue-state.mjs` の純粋な部分に加え、
+50件すべて pass すること。`aggregate.mjs` と `issue-state.mjs` の純粋な部分に加え、
 設定・プロンプト・Issueテンプレート・ラベル定義の整合性（wiring）も検証する。
 
 ### 7-2. アダプタの疎通（キーが必要）
@@ -307,6 +307,8 @@ Issue を1件作る（用途: 合議）。例:
 | `git push` が拒否される | ブランチ名が `claude/` 始まりか確認する |
 | 状態コメントが増殖した | 手で古い方を削除する。`issue-state.mjs` はマーカーを含む最初のコメントを正とする |
 | `/schedule` が Unknown command | claude.ai サブスクでログインしているか確認する（`ANTHROPIC_API_KEY` が環境にあると優先されてしまう） |
+| `gh` が `403 GitHub GraphQL is not available from Claude Code sessions` | クラウドセッションの制約。`--json` 系サブコマンドは使えない。`gh api`（REST）か `issue-state.mjs` のサブコマンドに置き換える。`npm test` の wiring テストがこの種の混入を検出する |
+| 成果物が `claude/loop-<n>-<slug>` 以外のブランチに入った | セッションが自動生成ブランチで始まり、`git checkout -B` が実行されていない。SKILL.md の Step 2 を確認する |
 | 日次上限に達した | スキップされた run は**翌日に繰り越されない**。cron 回数を減らすか Max を検討する |
 | Issue を作った直後の Run now が「対象なし」で終わる | `gh issue list --label` が引く GitHub のラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
 

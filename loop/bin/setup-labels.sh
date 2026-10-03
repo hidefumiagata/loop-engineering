@@ -16,6 +16,7 @@ LABELS=(
   "loop:propose|1d76db|3者が提案を作成中 (panel)"
   "loop:evaluate|5319e7|相互評価中 (panel)"
   "loop:decide|8b5cf6|集計結果から決定記録を作成中 (panel)"
+  "loop:handoff|8b5cf6|合議の結論を人間が確定するのを待っている (panel)"
   "loop:done|0e8a16|受入基準を満たして完了。PRのマージ待ち"
   "loop:blocked|b60205|自動で進められない。原因はIssueコメント参照"
   "loop:needs-human|d93f0b|人間の判断待ち。確認して loop:go を付けるか指示をコメントする"

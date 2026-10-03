@@ -11,6 +11,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTier } from '../bin/ask-llm.mjs';
 import { SCHEMA_NAMES } from '../bin/schemas.mjs';
+import { PHASE_LABELS } from '../bin/issue-state.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (p) => readFileSync(resolve(ROOT, p), 'utf8');
@@ -85,15 +86,62 @@ test('すべての用途ラベルが setup-labels.sh にある', () => {
   }
 });
 
-test('SKILL.md が使うフェーズラベルが setup-labels.sh にある', () => {
-  // issue-state.mjs の PHASES と対応するラベル
-  const phases = ['plan', 'work', 'review', 'brief', 'propose', 'evaluate', 'decide', 'done', 'blocked'];
-  for (const ph of phases) {
-    assert.ok(LABELS_SH.includes(`loop:${ph}|`), `setup-labels.sh に loop:${ph} が無い`);
+test('全フェーズのラベルが setup-labels.sh にある', () => {
+  // ハードコードするとフェーズを増やしたときにずれるので、issue-state.mjs の定義から導出する。
+  // syncPhase はこの集合のラベルを付け外しするため、定義が無いと GitHub 側で
+  // 既定色のラベルが勝手に作られてしまう。
+  assert.ok(PHASE_LABELS.length >= 10, `PHASE_LABELS の抽出に失敗 (${PHASE_LABELS.length} 件)`);
+  for (const label of PHASE_LABELS) {
+    assert.ok(LABELS_SH.includes(`${label}|`), `setup-labels.sh に ${label} が無い`);
   }
   for (const ctl of ['loop|', 'loop:needs-human|', 'loop:go|', 'loop:stop|']) {
     assert.ok(LABELS_SH.includes(ctl), `setup-labels.sh に ${ctl.slice(0, -1)} が無い`);
   }
+});
+
+test('クラウドで 403 になる GraphQL 経路の gh コマンドを使っていない', () => {
+  // 実測: Claude Code のクラウドセッションは GitHub GraphQL を 403 で拒否する。
+  //   "GitHub GraphQL is not available from Claude Code sessions; use the REST API"
+  // gh の --json 系サブコマンドは GraphQL を使うため、初回の run がこれで失敗した。
+  // 再発防止のため、手順書とスクリプトに現れたら落とす。
+  const forbidden = [
+    [/gh\s+repo\s+view/, 'gh repo view — repoSlug() のように git remote から導出する'],
+    [/gh\s+issue\s+list/, 'gh issue list — gh api repos/{repo}/issues?labels=... を使う'],
+    [/gh\s+issue\s+edit/, 'gh issue edit — issue-state.mjs の sync-phase / labels を使う'],
+    [/gh\s+issue\s+comment/, 'gh issue comment — issue-state.mjs の comment を使う'],
+    [/gh\s+issue\s+view/, 'gh issue view — gh api repos/{repo}/issues/{n} を使う'],
+    [/gh\s+label\s+list/, 'gh label list — gh api repos/{repo}/labels を使う'],
+    [/gh\s+pr\s+create/, 'gh pr create — gh api -X POST repos/{repo}/pulls を使う'],
+    [/gh\s+pr\s+ready/, 'gh pr ready — draft 解除は GraphQL 専用。通常PRで作るので不要'],
+    [/gh\s+pr\s+view/, 'gh pr view — gh api repos/{repo}/pulls/{n} を使う'],
+  ];
+  const targets = [
+    ['.claude/skills/loop-engine/SKILL.md', SKILL],
+    ['loop/bin/issue-state.mjs', read('loop/bin/issue-state.mjs')],
+    ['loop/bin/ask-llm.mjs', read('loop/bin/ask-llm.mjs')],
+    ['loop/bin/aggregate.mjs', read('loop/bin/aggregate.mjs')],
+    ['loop/prompts/roles/worker.md', read('loop/prompts/roles/worker.md')],
+    ['loop/prompts/usecases/deliberation.md', read('loop/prompts/usecases/deliberation.md')],
+  ];
+  // 「使ってはいけないもの」を列挙している区間は、マーカーで明示的に除外する。
+  // キーワード判定で誤魔化すと、本当の違反を取りこぼす。
+  const stripExcluded = (text) =>
+    text.replace(/<!-- graphql-forbidden-table:start[\s\S]*?graphql-forbidden-table:end -->/g, '');
+
+  for (const [path, text] of targets) {
+    // 散文で「これは GraphQL なので使えない」と注意している行も対象外にする
+    const lines = stripExcluded(text).split('\n').filter((l) => !/使えない|使わない|GraphQL/.test(l));
+    for (const [re, why] of forbidden) {
+      const hit = lines.find((l) => re.test(l));
+      assert.ok(!hit, `${path} が GraphQL 経路の gh を使っている: ${why}\n  → ${hit}`);
+    }
+  }
+});
+
+test('setup-labels.sh だけは gh label create/edit を使ってよい', () => {
+  // ラベル作成はローカルから1度だけ実行する運用で、クラウドセッションからは呼ばない。
+  // 上のテストの対象外にしていることを明示しておく。
+  assert.match(LABELS_SH, /gh label (create|edit)/);
 });
 
 test('Issueテンプレートの用途キーが config.usecases と一致する', () => {

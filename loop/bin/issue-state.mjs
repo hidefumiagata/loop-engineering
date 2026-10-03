@@ -1,15 +1,30 @@
 #!/usr/bin/env node
 // ループ状態を GitHub Issue 上の固定コメント1件に読み書きする。
 //
-//   node loop/bin/issue-state.mjs read     12
-//   node loop/bin/issue-state.mjs write    12 state.json
-//   node loop/bin/issue-state.mjs decision 12
+//   node loop/bin/issue-state.mjs read       12
+//   node loop/bin/issue-state.mjs write      12 state.json
+//   node loop/bin/issue-state.mjs decision   12
 //   node loop/bin/issue-state.mjs list
+//   node loop/bin/issue-state.mjs comment    12 body.md
+//   node loop/bin/issue-state.mjs sync-phase 12 review
+//   node loop/bin/issue-state.mjs labels     12 add|remove <名前...>
 //
 // なぜブランチ上のファイルではなく Issue コメントなのか:
 //   ポーラーは常に default branch から起動する。各 Issue の作業ブランチにある状態ファイルは
 //   読めないため、状態の正は GitHub 側に置く必要がある。
 //   副産物として「作業結果を Issue に記録する」という要件も同じ仕組みで満たせる。
+//
+// ★ 重要な制約（実測で判明）:
+//   Claude Code のクラウドセッションからは **GitHub GraphQL が 403 で拒否される**。
+//     403 "GitHub GraphQL is not available from Claude Code sessions;
+//          use the REST API (gh api repos/{owner}/{repo}/...)"
+// <!-- graphql-forbidden-table:start — 以下は「呼べないもの」の列挙なので wiring テストの検出対象外 -->
+//   呼べないサブコマンド: gh repo view --json / gh issue list --json / gh issue view --json /
+//   gh issue edit / gh issue comment / gh label list / gh pr create / gh pr ready
+// <!-- graphql-forbidden-table:end -->
+//   このファイルは `gh api`（REST）と `git` だけで完結させる。
+//   REST の /issues?labels= は検索インデックスを経由しないため、
+//   作成直後の Issue もすぐ取得できる（GraphQL 版にあったラベル反映遅延は起きない）。
 //
 // 認証は gh CLI に任せる。Claude Cloud では GH_TOKEN が自動で入っている。
 
@@ -19,9 +34,9 @@ import { execFileSync } from 'node:child_process';
 export const MARKER = '<!-- loop-state:v1 -->';
 const DRY = process.env.LOOP_DRY_RUN === '1';
 
-function gh(args, { input } = {}) {
+function run(cmd, args, { input, tolerate } = {}) {
   try {
-    return execFileSync('gh', args, {
+    return execFileSync(cmd, args, {
       encoding: 'utf8',
       input,
       maxBuffer: 32 * 1024 * 1024,
@@ -29,13 +44,38 @@ function gh(args, { input } = {}) {
     });
   } catch (e) {
     const detail = [e.stderr, e.stdout].filter(Boolean).join('\n').trim();
-    throw new Error(`gh ${args.join(' ')} が失敗しました\n${detail || e.message}`);
+    if (tolerate && tolerate.test(detail)) return '';
+    throw new Error(`${cmd} ${args.join(' ')} が失敗しました\n${detail || e.message}`);
   }
 }
 
+const gh = (args, opts) => run('gh', args, opts);
+const git = (args, opts) => run('git', args, opts);
+
+/**
+ * `gh api --paginate --jq` はページごとに1つの JSON を出力するため、
+ * 出力全体を JSON.parse すると2ページ目以降で壊れる。行ごとに読んで連結する。
+ */
+function ghJsonLines(args) {
+  return gh(args)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .flatMap((l) => JSON.parse(l));
+}
+
+/**
+ * owner/repo を決める。GraphQL が使えないので `gh repo view` は呼べない。
+ * 優先順: LOOP_REPO → GITHUB_REPOSITORY → git remote origin の URL。
+ */
 export function repoSlug() {
   if (process.env.LOOP_REPO) return process.env.LOOP_REPO;
-  return JSON.parse(gh(['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
+  if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
+  const url = git(['remote', 'get-url', 'origin']).trim();
+  // https://github.com/owner/repo(.git) と git@github.com:owner/repo(.git) の両方を受ける
+  const m = url.match(/[/:]([^/:]+)\/([^/]+?)(?:\.git)?$/);
+  if (!m) throw new Error(`git remote origin の URL から owner/repo を読めません: ${url}`);
+  return `${m[1]}/${m[2]}`;
 }
 
 // ---------------- 状態の検証 ----------------
@@ -103,7 +143,10 @@ export function parseStateComment(body) {
 // ---------------- 操作 ----------------
 
 function listComments(repo, issue) {
-  return JSON.parse(gh(['api', '--paginate', `repos/${repo}/issues/${issue}/comments`, '--jq', '[.[] | {id, body, user: .user.login, created_at}]']));
+  return ghJsonLines([
+    'api', '--paginate', `repos/${repo}/issues/${issue}/comments?per_page=100`,
+    '--jq', '[.[] | {id, body, user: .user.login, created_at}]',
+  ]);
 }
 
 export function readState(issue, repo = repoSlug()) {
@@ -163,23 +206,82 @@ export function readDecision(issue, repo = repoSlug()) {
   return hits.length ? hits[hits.length - 1] : null;
 }
 
-/** ループ対象の Issue を1件選ぶ（最終更新が最も古いもの = ラウンドロビン） */
+/**
+ * ループ対象の Issue を古い順に列挙する（先頭を処理するとラウンドロビンになる）。
+ * REST の /issues は Pull Request も混ぜて返すので pull_request を持つものを除く。
+ */
 export function listCandidates(repo = repoSlug()) {
-  const raw = JSON.parse(gh([
-    'issue', 'list', '--repo', repo, '--state', 'open', '--label', 'loop',
-    '--limit', '100', '--json', 'number,title,labels,updatedAt',
-  ]));
-  const names = (i) => i.labels.map((l) => l.name);
+  const raw = ghJsonLines([
+    'api', '--paginate',
+    `repos/${repo}/issues?labels=loop&state=open&sort=updated&direction=asc&per_page=100`,
+    '--jq', '[.[] | {number, title, labels: [.labels[].name], updatedAt: .updated_at, is_pr: has("pull_request")}]',
+  ]);
   return raw
+    .filter((i) => !i.is_pr)
     .filter((i) => {
-      const l = names(i);
+      const l = i.labels;
       if (l.includes('loop:stop') || l.includes('loop:done') || l.includes('loop:blocked')) return false;
       // 人間の判断待ちは、go が付くまで触らない
       if (l.includes('loop:needs-human') && !l.includes('loop:go')) return false;
       return true;
     })
-    .map((i) => ({ number: i.number, title: i.title, labels: names(i), updatedAt: i.updatedAt }))
+    .map(({ number, title, labels, updatedAt }) => ({ number, title, labels, updatedAt }))
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+}
+
+// ---------------- ラベルとコメント（すべて REST） ----------------
+
+/** Issue に現在付いているラベル名 */
+export function currentLabels(issue, repo = repoSlug()) {
+  return ghJsonLines(['api', '--paginate', `repos/${repo}/issues/${issue}/labels?per_page=100`, '--jq', '[.[].name]']);
+}
+
+export function addLabels(issue, names, repo = repoSlug()) {
+  if (!names.length) return;
+  if (DRY) { process.stderr.write(`[dry-run] ラベル追加 ${names.join(', ')} (issue #${issue})\n`); return; }
+  gh(['api', '-X', 'POST', `repos/${repo}/issues/${issue}/labels`, '--input', '-'], { input: JSON.stringify({ labels: names }) });
+}
+
+export function removeLabels(issue, names, repo = repoSlug()) {
+  for (const n of names) {
+    if (DRY) { process.stderr.write(`[dry-run] ラベル削除 ${n} (issue #${issue})\n`); continue; }
+    // 付いていないラベルの削除は 404 になる。冪等に扱いたいので許容する。
+    gh(['api', '-X', 'DELETE', `repos/${repo}/issues/${issue}/labels/${encodeURIComponent(n)}`],
+      { tolerate: /Label does not exist|HTTP 404/i });
+  }
+}
+
+/** 既知のフェーズラベル。sync-phase がこの集合の中だけを入れ替える */
+export const PHASE_LABELS = [
+  ...new Set([...PHASES.pipeline, ...PHASES.panel].map((p) => `loop:${p}`)),
+];
+
+/**
+ * フェーズラベルを1つだけに揃える。`loop` / `use:*` / 制御ラベル（needs-human, go, stop）は触らない。
+ * 手でラベルを足し引きさせると取り違えが起きるので、この操作をスクリプト側に閉じ込める。
+ */
+export function syncPhase(issue, phase, repo = repoSlug()) {
+  const want = `loop:${phase}`;
+  if (!PHASE_LABELS.includes(want)) {
+    throw new Error(`未知のフェーズ: ${phase} (有効: ${PHASE_LABELS.join(', ')})`);
+  }
+  const have = DRY ? [] : currentLabels(issue, repo);
+  const stale = have.filter((l) => PHASE_LABELS.includes(l) && l !== want);
+  removeLabels(issue, stale, repo);
+  if (!have.includes(want)) addLabels(issue, [want], repo);
+  return { added: have.includes(want) ? [] : [want], removed: stale };
+}
+
+/** Issue に人間可読のコメントを投稿する（gh issue comment は GraphQL なので使えない） */
+export function postComment(issue, body, repo = repoSlug()) {
+  if (DRY) {
+    process.stderr.write(`[dry-run] issue #${issue} にコメント投稿 (${body.length} 文字)\n`);
+    return { id: null, dryRun: true };
+  }
+  const created = JSON.parse(
+    gh(['api', '-X', 'POST', `repos/${repo}/issues/${issue}/comments`, '--input', '-'], { input: JSON.stringify({ body }) }),
+  );
+  return { id: created.id, url: created.html_url };
 }
 
 // ---------------- CLI ----------------
@@ -190,13 +292,19 @@ const USAGE = [
   '  node loop/bin/issue-state.mjs write <issue> <file.json> 状態コメントを作成/更新',
   '  node loop/bin/issue-state.mjs decision <issue>          状態更新後に投稿された /decide <ラベル> を取得',
   '  node loop/bin/issue-state.mjs list                      ループ対象 Issue を古い順に列挙',
+  '  node loop/bin/issue-state.mjs comment <issue> <file.md> 人間可読コメントを投稿',
+  '  node loop/bin/issue-state.mjs sync-phase <issue> <phase> フェーズラベルを1つに揃える',
+  '  node loop/bin/issue-state.mjs labels <issue> add|remove <名前...>',
   '',
-  '  LOOP_REPO=owner/repo でリポジトリを明示できる（既定は gh repo view）。',
+  '  すべて REST (gh api) で動く。クラウドセッションでは GitHub GraphQL が 403 になるため、',
+  '  --json 系サブコマンド（issue list / issue edit / issue comment / pr create 等）は使えない。',
+  '',
+  '  LOOP_REPO=owner/repo でリポジトリを明示できる（既定は git remote origin から導出）。',
   '  LOOP_DRY_RUN=1 で書き込みを行わずに内容だけ表示する。',
 ].join('\n');
 
 function main() {
-  const [cmd, a1, a2] = process.argv.slice(2);
+  const [cmd, a1, a2, ...rest] = process.argv.slice(2);
   switch (cmd) {
     case 'read': {
       if (!a1) throw new Error(USAGE);
@@ -221,6 +329,27 @@ function main() {
       const c = listCandidates();
       console.log(JSON.stringify(c, null, 2));
       process.stderr.write(`[ok] ループ対象 ${c.length} 件${c.length ? ` / 次に処理すべきは #${c[0].number}` : ''}\n`);
+      break;
+    }
+    case 'comment': {
+      if (!a1 || !a2) throw new Error(USAGE);
+      const r = postComment(Number(a1), readFileSync(a2, 'utf8'));
+      process.stderr.write(`[ok] issue #${a1} にコメント投稿 ${r.url ?? '(dry-run)'}\n`);
+      break;
+    }
+    case 'sync-phase': {
+      if (!a1 || !a2) throw new Error(USAGE);
+      const r = syncPhase(Number(a1), a2);
+      process.stderr.write(`[ok] issue #${a1} のフェーズラベルを loop:${a2} に揃えました`
+        + `${r.removed.length ? ` (削除: ${r.removed.join(', ')})` : ''}\n`);
+      break;
+    }
+    case 'labels': {
+      if (!a1 || !a2 || !rest.length) throw new Error(USAGE);
+      if (a2 === 'add') addLabels(Number(a1), rest);
+      else if (a2 === 'remove') removeLabels(Number(a1), rest);
+      else throw new Error(`labels の操作は add か remove です (received: ${a2})`);
+      process.stderr.write(`[ok] issue #${a1} のラベルを ${a2}: ${rest.join(', ')}\n`);
       break;
     }
     default:

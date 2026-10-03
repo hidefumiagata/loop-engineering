@@ -49,6 +49,8 @@ Claude Cloud Routine "loop-engine" ───────────────
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
+| **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
+| **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |
 
 ## なぜ「1 run = 1 イテレーション」なのか
 
