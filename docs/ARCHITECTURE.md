@@ -87,12 +87,10 @@ pipeline:  plan → work → review ─┬─ PASS ──→ done
                                  └─ BLOCKED → blocked + needs-human
            iteration > max_iterations → blocked + needs-human
 
-panel:     brief → propose → evaluate → decide ─┬─ 重み3が全案未達かつ round < max
-             ↑                                  │      → propose（round++）
-             └──────────────────────────────────┘
-                                                └─ → handoff + needs-human
-                                                        ↓ 人間が /decide <ラベル> + loop:go
-                                                   pipeline の work へ
+panel:     brief → propose → evaluate → synthesize → critique ─┬─ PASS → PR作成 → done
+             ↑                                     ↑ REVISE   │        （マージは人間）
+             │                                     └──1回だけ──┘
+             └── 重み3が全案未達 / BLOCKED のとき round++ して propose へ（max_panel_rounds まで）
 ```
 
 ラベルは状態の人間向けミラーであり、`gh issue list` のフィルタでもある。

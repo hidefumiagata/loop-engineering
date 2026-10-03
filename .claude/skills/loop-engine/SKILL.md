@@ -383,11 +383,23 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 | 429/5xx で取得できない | **停止しない。** 取得できなかった事実を「この答えの限界」に明記して完了にする。提案と違い、批評の欠落は答えを無効にしない |
 
 4. 終了処理:
-   - `phase: done`、`loop:done`
    - **Issue に `answer.md` の全文を投稿する。** 読者は Issue しか見ないつもりで書くこと。
      作業ブランチ上のファイルを開かせてはならない
-   - PR は作らなくてよい（実装への引き継ぎが無いため）。
-     ブランチに push した状態で完了とし、Issue 本文が成果物になる
+   - **PR を作る**（pipeline の work フェーズと同じ REST 呼び出し）。
+     答えは読んで終わりだが、**成果物が作業ブランチに取り残されると参照できなくなる**。
+     main に入れるかどうかは人間が決める:
+     ```bash
+     REPO=$(node -e "import('./loop/bin/issue-state.mjs').then(m=>console.log(m.repoSlug()))")
+     cat > /tmp/pr.json <<'EOF'
+     { "title": "deliberation(#<issue>): <テーマ>", "head": "<branch>", "base": "main",
+       "body": "Issue #<issue> の合議の答え。\n\n- 答え: projects/<slug>/answer.md\n- 寄与比率: A xx% / B xx% / C xx%（synthesis-check.json）\n- 批評: gemini <判定> / openai <判定>\n\nCloses #<issue>" }
+     EOF
+     gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number
+     ```
+     PR 本文には**寄与比率と批評の判定を必ず載せる**。マージする人が、答えが
+     自案に偏っていないか・批評で何が残ったかを PR 画面だけで判断できるようにする。
+     作成した PR 番号を状態の `pr` に入れる。
+   - `phase: done`、`loop:done`。**マージはしない。人間に委ねる**
 
 **`require_human_decision` は `false`。承認待ちで止めない。**
 人間が追加の論点や反証を Issue にコメントし `loop:go` を付けたら、

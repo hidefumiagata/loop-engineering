@@ -151,6 +151,24 @@ test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使ってい�
   assert.match(code, /execFileSync\('curl'/, 'curl 経由であることを明示的に確認する');
 });
 
+test('どちらのモードも最後は PR を作って人間に委ねる', () => {
+  // panel は実装への引き継ぎが無いが、成果物が作業ブランチに取り残されると参照できなくなる。
+  // main に入れるかどうかは人間が決める、という形を両モードで揃える。
+  const stripExcluded = (t) =>
+    t.replace(/<!-- graphql-forbidden-table:start[\s\S]*?graphql-forbidden-table:end -->/g, '');
+  const skill = stripExcluded(SKILL);
+
+  // REST での PR 作成が pipeline と panel の両方に書かれていること
+  const prCreations = [...skill.matchAll(/gh api -X POST "repos\/\$REPO\/pulls"/g)];
+  assert.ok(prCreations.length >= 2,
+    `PR 作成が ${prCreations.length} 箇所しかない。pipeline と panel の両方に必要`);
+
+  // 「PR は作らなくてよい」のような逃げ道が残っていないこと
+  assert.doesNotMatch(skill, /PR は作らなくてよい/, 'panel でも PR を作る');
+  // マージは人間に委ねる
+  assert.match(skill, /マージはしない/, 'エージェントにマージさせない');
+});
+
 test('長文を生成する propose 階層は background で非同期化されている', () => {
   // 実測: エージェントプロキシは1リクエスト約30秒で諦め、
   // 502 "upstream request failed" を返す（gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
