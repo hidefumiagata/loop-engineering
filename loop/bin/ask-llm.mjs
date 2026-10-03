@@ -96,6 +96,9 @@ function buildRequest({ providerName, provider, tier, system, input, schema, max
     };
     if (tier.reasoning_effort) body.reasoning = { effort: tier.reasoning_effort };
     if (schema) body.text = { format: toOpenAIFormat(schema) };
+    // 長い生成はエージェントプロキシの約30秒の壁に当たり 502 "upstream request failed" になる。
+    // background なら POST は即座に返り、あとは短い GET のポーリングで取りに行けるので壁を越えられる。
+    if (tier.background) { body.background = true; body.store = true; }
     return { url, body };
   }
 
@@ -158,7 +161,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 認証ヘッダは argv ではなく -K の設定ファイルで渡し、プロセス一覧にキーが出ないようにする
  * （クラウドではそもそも送らないが、ローカル開発で環境変数のキーを使うときのため）。
  */
-export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180 } = {}) {
+export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180, method = 'POST' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'loop-llm-'));
   const reqFile = join(dir, 'request.json');
   const resFile = join(dir, 'response.body');
@@ -177,13 +180,13 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180 } 
     // --fail 系は付けない。HTTP エラーは -w のステータスで判定し、本文も読みたいため。
     // こうしておくと curl の終了コードが非ゼロなのは本当の転送エラーのときだけになる。
     const args = [
-      '-sS', '-X', 'POST', url,
+      '-sS', '-X', method, url,
       '-K', cfgFile,
-      '--data-binary', `@${reqFile}`,
       '-o', resFile, '-D', hdrFile,
       '-w', '%{http_code}',
       '--max-time', String(timeoutSec),
     ];
+    if (method !== 'GET') args.push('--data-binary', `@${reqFile}`);
 
     let statusText = '';
     try {
@@ -216,6 +219,46 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180 } 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * OpenAI の background レスポンスが終わるまで短い GET を繰り返す。
+ *
+ * なぜ必要か:
+ *   エージェントプロキシは1リクエストあたり約30秒で諦め、
+ *   502 "upstream request failed" を返す（実測。gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
+ *   提案の生成は数千トークンかかるので同期リクエストでは原理的に収まらない。
+ *   background なら POST が即座に返り、以降は1回数百ミリ秒の GET で済むため壁を越えられる。
+ */
+export async function pollOpenAIBackground(provider, created, { log, maxWaitSec = 420, intervalSec = 5 } = {}) {
+  const url = `${provider.endpoint.replace(/\/$/, '')}/${created.id}`;
+  const { headers } = authHeaders(provider);
+  const deadline = Date.now() + maxWaitSec * 1000;
+  let last = created.status;
+
+  log(`[background] ${created.id} を投入しました。完了まで最大 ${maxWaitSec} 秒ポーリングします。`);
+
+  while (Date.now() < deadline) {
+    await sleep(intervalSec * 1000);
+    const res = curlPostJson(url, { method: 'GET', headers, timeoutSec: 30 });
+    if (!res.ok) {
+      // ポーリング自体の一時的な失敗は致命ではない。期限まで続ける。
+      log(`[background] ポーリングが HTTP ${res.status} を返しました。続行します。`);
+      continue;
+    }
+    let json;
+    try { json = JSON.parse(res.text); } catch { continue; }
+
+    if (json.status !== last) { log(`[background] status=${json.status}`); last = json.status; }
+    if (['completed', 'incomplete'].includes(json.status)) return json;
+    if (['failed', 'cancelled'].includes(json.status)) {
+      throw new Error(`OpenAI の background 実行が ${json.status} になりました: ${JSON.stringify(json.error ?? {}).slice(0, 300)}`);
+    }
+  }
+  throw new Error(
+    `OpenAI の background 実行が ${maxWaitSec} 秒以内に完了しませんでした (id=${created.id}, 最後の status=${last})。`
+    + ' --max-wait を延ばすか、max_output_tokens を減らしてください。',
+  );
 }
 
 /**
@@ -286,7 +329,7 @@ export function diagnose(res, bodyText, provider, authMode) {
 }
 
 export async function askLLM({
-  spec, system, input, schema = null, maxOutputTokens = 16000,
+  spec, system, input, schema = null, maxOutputTokens = 16000, maxWaitSec = 420,
   config = loadConfig(), log = (m) => process.stderr.write(m + '\n'),
 }) {
   if (schema && !SCHEMA_NAMES.includes(schema)) {
@@ -331,6 +374,11 @@ export async function askLLM({
       } catch {
         throw new Error(`${providerName}:${tierName} が JSON を返しませんでした。先頭200文字: ${res.text.slice(0, 200)}`);
       }
+      // background で投げた場合、POST は {id, status:"queued"} を即返すだけ。本体はポーリングで取る。
+      if (providerName === 'openai' && tier.background && json.id && !json.output?.length) {
+        json = await pollOpenAIBackground(provider, json, { log, maxWaitSec: maxWaitSec });
+      }
+
       const out = providerName === 'gemini' ? extractGemini(json) : extractOpenAI(json);
       const cost = computeCost(tier, out.usage);
       let parsed = null;
@@ -354,11 +402,13 @@ export async function askLLM({
     // 所要時間は 502/504 の切り分けに効く。長考がゲートウェイのタイムアウトに
     // 当たっているのか、即座に蹴られているのかはこの数字でしか分からない。
     lastErr = new Error(`HTTP ${res.status} (${elapsed}秒): ${bodyText.slice(0, 500)}`);
-    if ((res.status === 502 || res.status === 504) && elapsed >= 45) {
+    // 実測では 30 秒ちょうどで 502 "upstream request failed" が返った（プロキシ側のメッセージ）。
+    if ((res.status === 502 || res.status === 504) && elapsed >= 25) {
       lastErr.message += `\n[診断] 応答までに ${elapsed} 秒かかってから ${res.status} になりました。`
-        + 'ゲートウェイのタイムアウトの可能性が高いです。'
-        + `loop/config.json の providers.*.tiers.*.reasoning_effort を下げるか、`
-        + 'より応答の速いモデルに変えてください。';
+        + 'エージェントプロキシは約30秒で諦めるため、長い生成は同期リクエストでは通りません。'
+        + 'loop/config.json の該当階層に background: true を付けて非同期化してください。'
+        + '（reasoning_effort を下げるだけでは、生成そのものが長い場合に足りません。'
+        + 'background に対応していないプロバイダなら max_output_tokens を減らすしかありません。）';
     }
 
     const diag = diagnose(res, bodyText, provider, mode);
@@ -416,8 +466,9 @@ async function main() {
   const input = readFileSync(args.input, 'utf8');
   const schema = typeof args.schema === 'string' ? args.schema : null;
   const maxOutputTokens = args.max_output_tokens ? Number(args.max_output_tokens) : 16000;
+  const maxWaitSec = args.max_wait ? Number(args.max_wait) : 420;
 
-  const r = await askLLM({ spec, system, input, schema, maxOutputTokens });
+  const r = await askLLM({ spec, system, input, schema, maxOutputTokens, maxWaitSec });
 
   writeFileSync(args.out, schema ? JSON.stringify(r.parsed, null, 2) + '\n' : r.text, 'utf8');
   writeFileSync(`${args.out}.meta.json`, JSON.stringify({

@@ -80,7 +80,9 @@
             "in": 5,
             "out": 30
           },
-          "reasoning_effort": "high"
+          "reasoning_effort": "high",
+          "background": true,
+          "$comment": "長い生成はプロキシの約30秒制限に当たるため background で非同期化する"
         }
       }
     }
