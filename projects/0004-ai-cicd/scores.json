@@ -1,0 +1,309 @@
+{
+  "generated_at": "2026-10-03T15:52:41.922Z",
+  "generated_by": "loop/bin/aggregate.mjs",
+  "note": "このファイルは機械集計の出力です。Claude は参照のみで書き換えません。",
+  "criteria": [
+    {
+      "id": "c1",
+      "text": "品質の強制力をリモート側に残し、ローカルHookの迂回に対しても安全網が機能する設計になっている",
+      "weight": 3
+    },
+    {
+      "id": "c2",
+      "text": "CIの発火回数と計算時間を減らす具体的な手段が示され、何がどれだけ減るかの見通しが説明されている",
+      "weight": 3
+    },
+    {
+      "id": "c3",
+      "text": "ローカル検証とリモートCIの役割分担（何をどちらで実行するか）が明確に線引きされている",
+      "weight": 3
+    },
+    {
+      "id": "c4",
+      "text": "エージェントによるテストの削除・スキップ・アサーション弱体化、およびHook/CI設定の改変に対する、具体的な検出・防止策が含まれている",
+      "weight": 2
+    },
+    {
+      "id": "c5",
+      "text": "導入に必要な作業が具体的で、段階的に始められる（小さく始めて拡張できる）",
+      "weight": 2
+    },
+    {
+      "id": "c6",
+      "text": "設計上のトレードオフ（コスト・速度・品質）と、方式が壊れる失敗シナリオが、それぞれ具体項目として明記されている",
+      "weight": 2
+    },
+    {
+      "id": "c7",
+      "text": "人間のレビュー負荷への影響が考慮されている",
+      "weight": 1
+    }
+  ],
+  "total_weight": 16,
+  "evaluators": [
+    "claude",
+    "gemini",
+    "openai"
+  ],
+  "proposals": [
+    {
+      "label": "B",
+      "author": "claude",
+      "weighted_score": 4.792,
+      "weighted_score_excl_self": 4.875,
+      "by_evaluator": {
+        "claude": 4.625,
+        "gemini": 5,
+        "openai": 4.75
+      },
+      "inter_evaluator_spread": 0.375,
+      "by_criterion": {
+        "c1": {
+          "weight": 3,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c2": {
+          "weight": 3,
+          "mean": 4.333,
+          "spread": 1,
+          "n": 3
+        },
+        "c3": {
+          "weight": 3,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c4": {
+          "weight": 2,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c5": {
+          "weight": 2,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c6": {
+          "weight": 2,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c7": {
+          "weight": 1,
+          "mean": 4.333,
+          "spread": 1,
+          "n": 3
+        }
+      },
+      "concerns": [
+        {
+          "evaluator": "claude",
+          "biggest_concern": "静的差分ルールでは、テストヘルパー改変など巧妙な弱体化を検出できない"
+        },
+        {
+          "evaluator": "gemini",
+          "biggest_concern": "マージ先ブランチ側のスクリプトによるテスト弱体化検出があっても、ヘルパー書き換えや常時Trueアサーションなどのセマンティックな改変をすり抜けた場合、人間に過度の検知信頼が生まれてレビューが形骸化するリスク。"
+        },
+        {
+          "evaluator": "openai",
+          "biggest_concern": "差分検査の静的ルールでは巧妙な弱体化（テストヘルパー改変など）を確実に捕まえられないという仮定が最も不確か。案自体は人間承認で補うが、検知漏れ→マージキュー詰まりのリスクが残る。"
+        }
+      ],
+      "rank": 1
+    },
+    {
+      "label": "A",
+      "author": "openai",
+      "weighted_score": 4.75,
+      "weighted_score_excl_self": 4.75,
+      "by_evaluator": {
+        "claude": 4.5,
+        "gemini": 5,
+        "openai": 4.75
+      },
+      "inter_evaluator_spread": 0.5,
+      "by_criterion": {
+        "c1": {
+          "weight": 3,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c2": {
+          "weight": 3,
+          "mean": 4.333,
+          "spread": 1,
+          "n": 3
+        },
+        "c3": {
+          "weight": 3,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c4": {
+          "weight": 2,
+          "mean": 5,
+          "spread": 0,
+          "n": 3
+        },
+        "c5": {
+          "weight": 2,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c6": {
+          "weight": 2,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c7": {
+          "weight": 1,
+          "mean": 4.333,
+          "spread": 1,
+          "n": 3
+        }
+      },
+      "concerns": [
+        {
+          "evaluator": "claude",
+          "biggest_concern": "自己申告のHookログとPR本文テンプレートの運用が形骸化すること"
+        },
+        {
+          "evaluator": "gemini",
+          "biggest_concern": "Policy Guardやテスト変更理由の必須記載などゲートのルールが緻密な反面、偽陽性による人間承認待ちが増加してエージェントの自律開発スピードを著しく阻害する懸念。"
+        },
+        {
+          "evaluator": "openai",
+          "biggest_concern": "影響範囲マップ（パス→テスト対応）の初期精度が低いと、必要なテストがImpact Checkで選ばれずMerge Gateやリリース後に不具合が発覚する可能性が高い点が最も懸念される。"
+        }
+      ],
+      "rank": 2
+    },
+    {
+      "label": "C",
+      "author": "gemini",
+      "weighted_score": 4.438,
+      "weighted_score_excl_self": 4.344,
+      "by_evaluator": {
+        "claude": 3.938,
+        "gemini": 4.625,
+        "openai": 4.75
+      },
+      "inter_evaluator_spread": 0.812,
+      "by_criterion": {
+        "c1": {
+          "weight": 3,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c2": {
+          "weight": 3,
+          "mean": 4,
+          "spread": 0,
+          "n": 3
+        },
+        "c3": {
+          "weight": 3,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c4": {
+          "weight": 2,
+          "mean": 4.333,
+          "spread": 1,
+          "n": 3
+        },
+        "c5": {
+          "weight": 2,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c6": {
+          "weight": 2,
+          "mean": 4.667,
+          "spread": 1,
+          "n": 3
+        },
+        "c7": {
+          "weight": 1,
+          "mean": 3.667,
+          "spread": 1,
+          "n": 3
+        }
+      },
+      "concerns": [
+        {
+          "evaluator": "claude",
+          "biggest_concern": "アサーションを常に真にする類の改変が静的検知をすり抜ける"
+        },
+        {
+          "evaluator": "gemini",
+          "biggest_concern": "PR段階で重い検証を排してマージキューに集約しているため、競合や結合破壊がマージ直前で頻発した場合にキューが閉塞し開発全体のフローが止まるリスク。"
+        },
+        {
+          "evaluator": "openai",
+          "biggest_concern": "git-diffベースの静的検知（キーワード・行数・ファイル削除）だけでは巧妙なテスト無力化を捕らえきれない点が最も不安。検知漏れがマージキュー通過につながる可能性がある。"
+        }
+      ],
+      "rank": 3
+    }
+  ],
+  "winner": {
+    "label": "B",
+    "author": "claude",
+    "weighted_score": 4.792,
+    "margin": 0.042
+  },
+  "winner_excl_self": {
+    "label": "B",
+    "author": "claude",
+    "weighted_score_excl_self": 4.875,
+    "margin": 0.125
+  },
+  "self_score_bias": [
+    {
+      "evaluator": "claude",
+      "own_label": "B",
+      "own_score": 4.625,
+      "others_mean": 4.219,
+      "bias": 0.406
+    },
+    {
+      "evaluator": "gemini",
+      "own_label": "C",
+      "own_score": 4.625,
+      "others_mean": 5,
+      "bias": -0.375
+    },
+    {
+      "evaluator": "openai",
+      "own_label": "A",
+      "own_score": 4.75,
+      "others_mean": 4.75,
+      "bias": 0
+    }
+  ],
+  "agreement": {
+    "kendall_w": 0.361,
+    "mean_inter_evaluator_spread": 0.562,
+    "evaluators_in_agreement_metric": 3,
+    "top_pick_unanimous": false
+  },
+  "unmet_criteria": [],
+  "warnings": [
+    "評価者間の一致度が低い (Kendall W=0.361)。評価階層のモデルを引き上げるか、brief.md の基準を具体化してください。",
+    "首位と次点の差が 0.042 点しかありません。スコアだけで決めず、decision.md で質的な根拠を示してください。"
+  ]
+}
