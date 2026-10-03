@@ -1,0 +1,9 @@
+# Claude Cloud のサンドボックスは Linux (Ubuntu 24.04)。
+# CRLF で配布されると bash スクリプトが壊れ、Node も shebang を解釈できなくなるため
+# 行末はリポジトリ内・作業ツリーともに LF で固定する。
+* text=auto eol=lf
+
+# バイナリは触らない
+*.png binary
+*.jpg binary
+*.pdf binary

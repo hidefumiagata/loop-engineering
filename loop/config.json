@@ -1,0 +1,131 @@
+{
+  "$comment": "loop-engineering の中央設定。SKILL.md と loop/bin/*.mjs がこれを読む。プラン変更時は preset を変えるだけでよい。",
+  "version": 1,
+  "preset": "pro",
+  "presets": {
+    "pro": {
+      "$comment": "Pro は routines が 5 run/日。run 数が律速なので 1 run で複数フェーズを通す。",
+      "granularity": "iteration",
+      "issues_per_run": 1
+    },
+    "max": {
+      "$comment": "Max は 15 run/日。1 run 1 フェーズにして記録を細かくし、巻き戻しを容易にする。",
+      "granularity": "phase",
+      "issues_per_run": 2
+    }
+  },
+  "defaults": {
+    "max_iterations": 5,
+    "max_panel_rounds": 2,
+    "base_branch": "main",
+    "branch_prefix": "claude/loop-"
+  },
+  "providers": {
+    "gemini": {
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+      "auth": {
+        "header": "x-goog-api-key",
+        "prefix": "",
+        "local_env": "GEMINI_API_KEY"
+      },
+      "tiers": {
+        "review": {
+          "enabled": true,
+          "model": "gemini-3.1-flash-lite",
+          "price_per_mtok": {
+            "in": 0.25,
+            "out": 1.5
+          }
+        },
+        "propose": {
+          "enabled": true,
+          "model": "gemini-3.1-pro",
+          "price_per_mtok": {
+            "in": 2,
+            "out": 12
+          }
+        }
+      }
+    },
+    "openai": {
+      "endpoint": "https://api.openai.com/v1/responses",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer",
+        "local_env": "OPENAI_API_KEY"
+      },
+      "tiers": {
+        "review": {
+          "enabled": false,
+          "model": "gpt-5-mini",
+          "price_per_mtok": {
+            "in": 0.25,
+            "out": 2
+          }
+        },
+        "evaluate": {
+          "enabled": true,
+          "model": "gpt-5-mini",
+          "price_per_mtok": {
+            "in": 0.25,
+            "out": 2
+          },
+          "reasoning_effort": "low"
+        },
+        "propose": {
+          "enabled": true,
+          "model": "gpt-5.2",
+          "price_per_mtok": {
+            "in": 1.75,
+            "out": 14
+          },
+          "reasoning_effort": "high"
+        }
+      }
+    }
+  },
+  "usecases": {
+    "research": {
+      "mode": "pipeline",
+      "label": "use:research",
+      "deliverable": "report.md",
+      "reviewer": "gemini:review",
+      "planner_critic": "gemini:review",
+      "require_human_decision": false
+    },
+    "build": {
+      "mode": "pipeline",
+      "label": "use:build",
+      "deliverable": "src/",
+      "reviewer": "gemini:review",
+      "planner_critic": "gemini:review",
+      "require_human_decision": false
+    },
+    "ideation": {
+      "mode": "pipeline",
+      "label": "use:ideation",
+      "deliverable": "report.md",
+      "reviewer": "gemini:review",
+      "planner_critic": "gemini:review",
+      "require_human_decision": false
+    },
+    "deliberation": {
+      "mode": "panel",
+      "label": "use:deliberation",
+      "deliverable": "decision.md",
+      "proposers": [
+        "claude",
+        "gemini:propose",
+        "openai:propose"
+      ],
+      "evaluators": [
+        "claude",
+        "gemini:propose",
+        "openai:evaluate"
+      ],
+      "planner_critic": "gemini:review",
+      "min_proposers": 3,
+      "require_human_decision": true
+    }
+  }
+}

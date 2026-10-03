@@ -1,0 +1,14 @@
+{
+  "name": "loop-engineering",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GitHub Issue に目的を書くと Claude Cloud の routines が自律的に作業・レビューを反復する基盤",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test loop/test/aggregate.test.mjs loop/test/issue-state.test.mjs loop/test/wiring.test.mjs",
+    "labels": "bash loop/bin/setup-labels.sh"
+  }
+}

@@ -1,0 +1,96 @@
+name: ループタスク
+description: 達成したいことを書くと、Claude Cloud の routine が自律的に作業・レビューを反復します
+title: "[loop] "
+labels: ["loop"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このIssueを作ると、次の定期実行（JST 09:00 / 15:00 / 21:00）でエージェントが着手します。
+        すぐ動かしたいときは routine の **Run now** を使ってください。
+
+        進行は自動で付く `loop:*` ラベルと、Issue 上に1件だけ作られる「ループ状態」コメントで追えます。
+        **止めたくなったら `loop:stop` ラベルを付けてください。** 即時に対象外になります。
+
+  - type: dropdown
+    id: usecase
+    attributes:
+      label: 用途
+      description: これによって作業の進め方と成果物の形が変わります
+      options:
+        - 技術調査 (research)
+        - プログラム構築 (build)
+        - アイデア深堀 (ideation)
+        - 合議 — 3つのLLMが案を出して相互評価する (deliberation)
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 達成したいこと
+      description: |
+        何を手に入れたいかを書いてください。やり方の指示ではなく、欲しい結果を書くのがコツです。
+        最初の実行で、これを検証可能な受入基準に翻訳します。曖昧なままだとそこで止まって質問が来ます。
+      placeholder: |
+        例（調査）: Claude Code の routines と GitHub Actions のどちらを自動化基盤に使うべきか、
+        コスト・制約・運用の手間の観点で比較して判断材料をそろえたい。
+
+        例（合議）: このループ基盤の状態保持方式を決めたい。Issueコメント / リポジトリ内ファイル /
+        外部DB の3案を比較して、運用の単純さを最優先に選びたい。
+    validations:
+      required: true
+
+  - type: textarea
+    id: facts
+    attributes:
+      label: 前提・すでに分かっていること
+      description: |
+        制約（予算・期限・既存の設計）や、調べ直さなくてよい既知の事実を書いてください。
+
+        **合議 (deliberation) の場合はここが特に重要です。** Gemini と OpenAI は実行環境のファイルも
+        Webも見られません。ここに書かれた内容が共有ブリーフの出発点になります。
+      placeholder: |
+        - Claude は Pro プラン。routines は 5 run/日 が上限
+        - 追加の月額課金は数ドルまで
+        - 既存のコードは loop/bin/ 配下にある
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 「できた」と言える条件
+      description: |
+        思いつく範囲で構いません。空欄でもエージェントが起草します。
+        ここに書いた内容は起草の出発点として尊重されます。
+      placeholder: |
+        - 3つの選択肢それぞれについて、採用条件と非採用条件が出典付きで書かれている
+        - 月額コストの概算が計算過程つきで出ている
+    validations:
+      required: false
+
+  - type: dropdown
+    id: max_iterations
+    attributes:
+      label: 最大反復回数
+      description: |
+        この回数のレビューを経ても受入基準を満たせなければ、自動で停止して人間に渡します。
+        Pro プランは 5 run/日 なので、大きくすると他のIssueの進行を圧迫します。
+      options:
+        - "3 — 軽い調査向け"
+        - "5 — 既定"
+        - "8 — 重いテーマ向け"
+      default: 1
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: 確認
+      options:
+        - label: このIssueの内容が、公開されても困らない私有リポジトリ上で処理されることを理解している
+          required: true
+        - label: 合議 (deliberation) を選んだ場合、OpenAI と Gemini の有料APIが呼ばれる（1ラウンド約 USD 0.33）ことを理解している
+          required: false
