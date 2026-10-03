@@ -93,7 +93,22 @@ node loop/bin/issue-state.mjs read <issue>
 
 ### 状態がある場合
 
-`state.phase` から再開する。**前回の run が途中で落ちた場合、状態コメントは更新されていない。**
+**まず `state.branch` に移る。これを飛ばしてはならない。**
+セッションは毎回まっさらな VM で始まり、`main` ではなく自動生成の `claude/<形容詞>-<名前>`
+ブランチに居ることがある（実測）。checkout を省くと、再開した run が設計外のブランチに push し、
+Issue と成果物の対応が切れる。
+
+```bash
+git fetch origin
+# リモートに既にあればそれを追跡し、無ければ origin/main から作る
+git checkout -B "<state.branch>" "$(git rev-parse --verify --quiet "origin/<state.branch>" >/dev/null \
+  && echo "origin/<state.branch>" || echo "origin/main")"
+git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず確認する
+```
+
+一致しなければ、そこで止めて Issue に書き `loop:blocked` にする。違うブランチで作業を続けない。
+
+そのうえで `state.phase` から再開する。**前回の run が途中で落ちた場合、状態コメントは更新されていない。**
 その場合は同じフェーズをもう一度実行することになる。各フェーズは冪等に書かれているので、
 やり直して構わない（既にあるファイルは上書きされる）。
 
