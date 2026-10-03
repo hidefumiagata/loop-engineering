@@ -20,6 +20,23 @@ import { join, basename } from 'node:path';
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 const round = (x, n = 3) => Math.round(x * 10 ** n) / 10 ** n;
 
+/**
+ * 評価者が返したラベルを正規化する。
+ *
+ * 実運用で、提示パケットの見出しが「# 案 A」だったため評価者が label に「案 B」を返し、
+ * 集計が別案として扱った。そのときエージェントは evaluations/*.json を手で書き換えて
+ * しのいだが、**評価者の出力を編集するのは合議の証跡を壊す行為**であり、繰り返させてはならない。
+ * ゆらぎは集計側で吸収する。
+ *
+ *   "B" → "B" / "案 B" → "B" / "Proposal B" → "B" / "b" → "B"
+ */
+export function normalizeLabel(raw) {
+  const s = String(raw ?? '').trim();
+  if (/^[A-Za-z0-9]+$/.test(s)) return s.toUpperCase();
+  const tokens = s.match(/[A-Za-z0-9]+/g);
+  return tokens?.length ? tokens[tokens.length - 1].toUpperCase() : s;
+}
+
 /** 同順位は平均順位を割り当てる（1 が最良 = 高スコア） */
 export function averageRanks(scoreByLabel) {
   const entries = Object.entries(scoreByLabel).sort((a, b) => b[1] - a[1]);
@@ -66,6 +83,20 @@ export function aggregate({ criteria, authors, evaluations }) {
   const criterionIds = criteria.map((c) => c.id);
   const weightOf = Object.fromEntries(criteria.map((c) => [c.id, c.weight ?? 1]));
   const totalWeight = criterionIds.reduce((a, id) => a + weightOf[id], 0);
+  // ラベルのゆらぎをここで吸収する。評価者の出力そのものは書き換えさせない。
+  const renamed = new Set();
+  for (const { data } of evaluations) {
+    for (const p of data.proposals ?? []) {
+      const n = normalizeLabel(p.label);
+      if (n !== p.label) renamed.add(`"${p.label}" → "${n}"`);
+      p.label = n;
+    }
+  }
+  if (renamed.size) {
+    warnings.push(`評価者が返したラベルを正規化しました: ${[...renamed].join(', ')}。`
+      + '提示パケットの見出しが単独のラベルになっているか確認してください。');
+  }
+
   const labels = [...new Set(evaluations.flatMap((e) => (e.data.proposals ?? []).map((p) => p.label)))].sort();
 
   if (labels.length < 2) warnings.push(`評価対象の案が ${labels.length} 件しかありません。合議として成立していません。`);
@@ -257,7 +288,9 @@ export function collectFromDir(dir) {
   const evalDir = join(dir, 'evaluations');
   if (!existsSync(evalDir)) throw new Error(`${evalDir} がありません。`);
   const evaluations = readdirSync(evalDir)
-    .filter((f) => /^by-.+\.json$/.test(f))
+    // `by-gemini.json.meta.json` のようなコスト記録を評価者として数えてはいけない。
+    // 実運用で by-gemini.json.meta という架空の評価者が集計に混ざった。
+    .filter((f) => /^by-[^.]+\.json$/.test(f))
     .sort()
     .map((f) => ({
       evaluator: basename(f, '.json').replace(/^by-/, ''),

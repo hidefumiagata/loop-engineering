@@ -79,10 +79,10 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 | --- | --- | --- |
 | Claude | Pro サブスクリプション。routines は **5 run/日**が上限 | $20/月（既存） |
 | Gemini | 通常レビューは `gemini-3.1-flash-lite` の**無料枠** | $0 |
-| Gemini | 合議のみ `gemini-3.8-flash` 有料 | 1ラウンド $0.05 |
-| OpenAI | 合議のみ（`propose`=gpt-5.5 / `evaluate`=gpt-5-mini）。通常レビューでは **OFF** | 1ラウンド $0.18 |
+| Gemini | 合議のみ `gemini-3.8-flash` 有料 | 1ラウンド $0.03（実測） |
+| OpenAI | 合議のみ（`propose`=gpt-5.5 / `evaluate`=gpt-5-mini）。通常レビューでは **OFF** | 1ラウンド $0.32（実測） |
 
-合議を月4件 × 2ラウンド回しても **約 $1.9/月**。通常の調査ループは追加課金ゼロ。
+合議を月4件 × 2ラウンド回しても **約 $2.9/月**。通常の調査ループは追加課金ゼロ。
 
 `loop/config.json` の `providers.*.tiers.*.enabled` が課金の門になっており、
 `false` の階層を呼ぼうとすると即エラー終了する。

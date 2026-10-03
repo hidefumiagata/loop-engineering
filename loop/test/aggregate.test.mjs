@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregate, averageRanks, kendallW } from '../bin/aggregate.mjs';
+import { aggregate, averageRanks, kendallW, normalizeLabel } from '../bin/aggregate.mjs';
 
 const CRITERIA = [
   { id: 'c1', text: '運用の単純さ', weight: 3 },
@@ -281,4 +281,36 @@ test('著者不明の案は自己採点除外の対象にしない', () => {
   const a = r.proposals.find((p) => p.label === 'A');
   assert.equal(a.weighted_score_excl_self, a.weighted_score);
   assert.equal(r.self_score_bias.length, 0);
+});
+
+test('評価者が返したラベルのゆらぎを吸収する', () => {
+  // 実運用で、パケット見出しが「# 案 A」だったため評価者が "案 B" を返した。
+  // そのときエージェントは evaluations/*.json を手で書き換えて回避したが、
+  // 評価者の出力を編集するのは証跡を壊す。集計側で吸収し、吸収したことを警告に出す。
+  const mk = (label, score) => ({ ...flat('X', score), label });
+  const r = aggregate({
+    criteria: CRITERIA,
+    authors: { A: 'claude', B: 'gemini' },
+    evaluations: [
+      { evaluator: 'claude', data: evaluation([mk('A', 5), mk('B', 3)]) },
+      { evaluator: 'gemini', data: evaluation([mk('案 A', 5), mk('案 B', 3)]) },
+      { evaluator: 'openai', data: evaluation([mk('Proposal A', 5), mk('b', 3)]) },
+    ],
+  });
+
+  assert.deepEqual(r.proposals.map((p) => p.label), ['A', 'B'], '3者の表記ゆれが同じ案にまとまる');
+  assert.equal(r.proposals.find((p) => p.label === 'A').by_evaluator.openai, 5,
+    '"Proposal A" が A として集計されている');
+  assert.equal(r.proposals.find((p) => p.label === 'B').by_evaluator.gemini, 3,
+    '"案 B" が B として集計されている');
+  assert.ok(r.warnings.some((w) => w.includes('正規化しました')), '黙って直さず記録に残す');
+});
+
+test('normalizeLabel の規則', () => {
+  assert.equal(normalizeLabel('B'), 'B');
+  assert.equal(normalizeLabel('案 B'), 'B');
+  assert.equal(normalizeLabel('案B'), 'B');
+  assert.equal(normalizeLabel('Proposal B'), 'B');
+  assert.equal(normalizeLabel(' b '), 'B');
+  assert.equal(normalizeLabel('A1'), 'A1', '英数字だけならそのまま大文字化する');
 });
