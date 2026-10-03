@@ -270,6 +270,15 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    git push
    ```
 3. その後で他の提案者を呼ぶ。`config.usecases.deliberation.proposers` から `claude` 以外を取る。
+
+   > **提案の生成は数分かかることがある。** エージェントプロキシは1リクエスト約30秒で諦めるため、
+   > `openai:propose` は `background: true` で非同期化してあり、`ask-llm.mjs` が内部でポーリングする
+   > （最大 420 秒。`--max-wait` で変更可）。
+   > **この呼び出しは Bash の `run_in_background: true` で実行すること。**
+   > 前景で実行すると 120 秒で打ち切られ、`sleep` での待機は禁止されているため扱いに困る。
+   > 完了通知を受けてから結果ファイルを読む。
+
+
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/proposer.md \
      --input projects/<slug>/brief.md --max-output-tokens 8000 \

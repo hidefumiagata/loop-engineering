@@ -151,6 +151,18 @@ test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使ってい�
   assert.match(code, /execFileSync\('curl'/, 'curl 経由であることを明示的に確認する');
 });
 
+test('長文を生成する propose 階層は background で非同期化されている', () => {
+  // 実測: エージェントプロキシは1リクエスト約30秒で諦め、
+  // 502 "upstream request failed" を返す（gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
+  // 提案は数千トークンの生成なので同期リクエストでは原理的に収まらない。
+  // background を外すと合議が propose で止まる。
+  const t = config.providers.openai.tiers.propose;
+  assert.equal(t.background, true, 'openai:propose の background を外してはならない');
+  // 他プロバイダは background 非対応。収まる範囲で使う前提なので強制しない。
+  assert.notEqual(config.providers.gemini.tiers.propose.background, true,
+    'Gemini に background は無い。付けると送信ボディに未知のフィールドが混じる');
+});
+
 test('setup-labels.sh だけは gh label create/edit を使ってよい', () => {
   // ラベル作成はローカルから1度だけ実行する運用で、クラウドセッションからは呼ばない。
   // 上のテストの対象外にしていることを明示しておく。
