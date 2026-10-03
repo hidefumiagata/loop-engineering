@@ -53,7 +53,18 @@ draft PR を作らないのも同じ理由。`draft → ready` の遷移は Grap
 
 ## 他社LLMの呼び出し
 
-必ず `node loop/bin/ask-llm.mjs` 経由。`curl` を直接書かない。
+必ず `node loop/bin/ask-llm.mjs` 経由。自分で HTTP を書かない。
+
+**`ask-llm.mjs` の内部転送は curl である。Node の `fetch` に戻してはならない。**
+サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、
+API credential のキーはそのプロキシが付与する。Node の `fetch`（undici）は
+`HTTPS_PROXY` を既定で無視するため（`NODE_USE_ENV_PROXY` は Node 24 以降・サンドボックスは Node 22）、
+プロキシを素通りしてキーの付かないリクエストがプロバイダに届く。
+実測で、同一リクエストが curl では 200、Node fetch では 403/401 になった。
+wiring テストがこの退行を検出する。
+
+疎通が怪しいときは `node loop/bin/doctor.mjs` を実行する。
+fetch と curl の両方で叩いて「キー未付与 / キー無効 / ネットワーク拒否 / プロキシ非経由」を切り分ける。
 
 APIキーはサンドボックス内に**存在しない**。Anthropic のエージェントプロキシが
 リクエストがVMを出た後にヘッダを付与する。したがって:
