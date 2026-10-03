@@ -181,6 +181,11 @@ npm test
 
 ### 7-2. アダプタの疎通（キーが必要）
 
+行き詰まったら `node loop/bin/doctor.mjs` を使う。
+ローカルでもクラウドセッションでも動き、どこで止まっているかを名指しする。
+**クラウドで実行するときは `loop-env` を選んだ通常セッションで行う**（routine ではないので日次 run 上限を消費しない）。
+
+
 ```bash
 export GEMINI_API_KEY=...        # ローカル開発時のみ。クラウドでは不要
 printf 'こんにちは。動作確認です。「OK」とだけ答えてください。\n' > /tmp/smoke.md
@@ -299,6 +304,7 @@ Issue を1件作る（用途: 合議）。例:
 
 | 症状 | 原因と対処 |
 | --- | --- |
+| **他社LLM が呼べない（原因が分からない）** | **まず `node loop/bin/doctor.mjs` を実行する。** Node fetch と curl の両方で叩いて「キー未付与 / キー無効 / ネットワーク拒否 / プロキシ非経由」を切り分ける。キーの値は出力しないのでそのまま共有してよい |
 | `403` + `x-deny-reason: host_not_allowed` | `loop-env` の Network access が Trusted のまま、または credential のホスト指定が違う |
 | Gemini が `API key not valid` | credential の Custom header Prefix に `Bearer` が残っている。**Prefix を空にする** |
 | OpenAI が `401` | Credential type が Bearer でない、またはキーが無効 |

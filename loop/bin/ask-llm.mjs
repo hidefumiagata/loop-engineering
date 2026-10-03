@@ -13,9 +13,11 @@
 //  * 429/5xx は指数バックオフで再試行し、最終失敗は非ゼロ終了する。
 //    呼び出し側（SKILL.md）がフォールバックを判断する。
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { toGeminiSchema, toOpenAIFormat, SCHEMA_NAMES } from './schemas.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -142,6 +144,81 @@ function extractOpenAI(json) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * HTTP POST を curl で行う。
+ *
+ * ★ Node の fetch を使ってはならない。
+ *   Claude Cloud のサンドボックスは HTTPS_PROXY 環境変数でエージェントプロキシを指しており、
+ *   API credential のキーはそのプロキシがリクエストに付与する。
+ *   ところが Node の fetch(undici) は HTTPS_PROXY を既定で無視するため、
+ *   プロキシを素通りしてキーの付かないリクエストがプロバイダに届く。
+ *   （env proxy を見る NODE_USE_ENV_PROXY は Node 24 以降。サンドボックスは Node 22。）
+ *   実測: 同一リクエストが curl では 200、Node fetch では 403/401 になった。
+ *   curl は HTTPS_PROXY を尊重するので、転送は curl に一本化する。
+ *
+ * 認証ヘッダは argv ではなく -K の設定ファイルで渡し、プロセス一覧にキーが出ないようにする
+ * （クラウドではそもそも送らないが、ローカル開発で環境変数のキーを使うときのため）。
+ */
+export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180 } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-llm-'));
+  const reqFile = join(dir, 'request.json');
+  const resFile = join(dir, 'response.body');
+  const hdrFile = join(dir, 'response.headers');
+  const cfgFile = join(dir, 'curl.conf');
+
+  try {
+    writeFileSync(reqFile, body, 'utf8');
+    // ヘッダは設定ファイル経由。値に " が含まれる場合に備えてエスケープする。
+    writeFileSync(
+      cfgFile,
+      Object.entries(headers).map(([k, v]) => `header = "${k}: ${String(v).replace(/"/g, '\\"')}"`).join('\n') + '\n',
+      'utf8',
+    );
+
+    // --fail 系は付けない。HTTP エラーは -w のステータスで判定し、本文も読みたいため。
+    // こうしておくと curl の終了コードが非ゼロなのは本当の転送エラーのときだけになる。
+    const args = [
+      '-sS', '-X', 'POST', url,
+      '-K', cfgFile,
+      '--data-binary', `@${reqFile}`,
+      '-o', resFile, '-D', hdrFile,
+      '-w', '%{http_code}',
+      '--max-time', String(timeoutSec),
+    ];
+
+    let statusText = '';
+    try {
+      statusText = execFileSync('curl', args, { encoding: 'utf8', maxBuffer: 1 << 20, windowsHide: true });
+    } catch (e) {
+      const why = [e.stderr, e.message].filter(Boolean).join(' ').trim();
+      throw new Error(`curl の実行に失敗しました: ${why || '原因不明'}`);
+    }
+    if (!/^\d{3}$/.test(statusText.trim())) {
+      throw new Error(`curl がステータスコードを返しませんでした: ${statusText.slice(0, 200)}`);
+    }
+
+    const status = Number(statusText.trim());
+    const text = readFileSync(resFile, 'utf8');
+    const raw = readFileSync(hdrFile, 'utf8');
+
+    const map = new Map();
+    for (const line of raw.split(/\r?\n/)) {
+      const i = line.indexOf(':');
+      if (i > 0) map.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+    }
+
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status >= 400 ? 'Error' : 'OK',
+      headers: { get: (k) => map.get(String(k).toLowerCase()) ?? null },
+      text,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * 設定起因の失敗を切り分けて、人間が見るべき画面を名指しする診断文を返す。
  * 直らないものだけを返す（再試行の価値があるエラーには null を返す）。
  *
@@ -179,7 +256,8 @@ export function diagnose(res, bodyText, provider, authMode) {
       + `キーが付いていません（ネットワーク設定は正常です）。${where} に、このホスト宛の credential が`
       + `登録されているか確認してください。ヘッダ名は "${header}" である必要があります。`
       + '（環境を作成したあと、もう一度開かないと API credentials 欄は現れません。'
-      + '一覧で "Not sent" になっている場合はその下の注記に理由が書かれています。）';
+      + '一覧で "Not sent" になっている場合はその下の注記に理由が書かれています。）'
+      + ' 切り分けには node loop/bin/doctor.mjs を使ってください。';
   }
 
   // キーは届いたが無効
@@ -224,8 +302,7 @@ export async function askLLM({
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let res;
     try {
-      res = await fetch(url, {
-        method: 'POST',
+      res = curlPostJson(url, {
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify(body),
       });
@@ -239,7 +316,12 @@ export async function askLLM({
     }
 
     if (res.ok) {
-      const json = await res.json();
+      let json;
+      try {
+        json = JSON.parse(res.text);
+      } catch {
+        throw new Error(`${providerName}:${tierName} が JSON を返しませんでした。先頭200文字: ${res.text.slice(0, 200)}`);
+      }
       const out = providerName === 'gemini' ? extractGemini(json) : extractOpenAI(json);
       const cost = computeCost(tier, out.usage);
       let parsed = null;
@@ -258,8 +340,8 @@ export async function askLLM({
       };
     }
 
-    const bodyText = await res.text().catch(() => '');
-    lastErr = new Error(`HTTP ${res.status} ${res.statusText}: ${bodyText.slice(0, 500)}`);
+    const bodyText = res.text ?? '';
+    lastErr = new Error(`HTTP ${res.status}: ${bodyText.slice(0, 500)}`);
 
     const diag = diagnose(res, bodyText, provider, mode);
     if (diag) {

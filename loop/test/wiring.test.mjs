@@ -138,6 +138,19 @@ test('クラウドで 403 になる GraphQL 経路の gh コマンドを使っ�
   }
 });
 
+test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使っていない', () => {
+  // 実測: Claude Cloud は HTTPS_PROXY 環境変数でエージェントプロキシを指しており、
+  // API credential のキーはそのプロキシが付与する。Node の fetch(undici) は
+  // HTTPS_PROXY を既定で無視するため（NODE_USE_ENV_PROXY は Node 24 以降・
+  // サンドボックスは Node 22）、プロキシを素通りしてキーの付かないリクエストが届く。
+  // 同一リクエストが curl では 200、Node fetch では 403/401 になることを確認している。
+  // ここで fetch に戻すと、また「credential を登録したのに 403」で数時間溶かすことになる。
+  const src = read('loop/bin/ask-llm.mjs');
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert.doesNotMatch(code, /(?<![.\w])fetch\s*\(/, 'ask-llm.mjs がグローバル fetch を呼んでいる。curlPostJson を使うこと');
+  assert.match(code, /execFileSync\('curl'/, 'curl 経由であることを明示的に確認する');
+});
+
 test('setup-labels.sh だけは gh label create/edit を使ってよい', () => {
   // ラベル作成はローカルから1度だけ実行する運用で、クラウドセッションからは呼ばない。
   // 上のテストの対象外にしていることを明示しておく。
