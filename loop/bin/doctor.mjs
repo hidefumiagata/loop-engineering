@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 // 他社LLM が呼べないときの切り分けツール。
 //
-//   node loop/bin/doctor.mjs
+//   node loop/bin/doctor.mjs            疎通の切り分け
+//   node loop/bin/doctor.mjs --models   各プロバイダで実際に使えるモデル名を列挙
+//
+// --models が要る理由:
+//   config.json のモデル名を資料や記憶から書くと外れる。実際に
+//   「models/gemini-3.1-pro is not found for API version v1beta」で合議が止まった。
+//   プロバイダ自身に聞けば確実なので、推測で直さずここで列挙して選ぶ。
 //
 // 「credential を登録したのに 403 PERMISSION_DENIED が出る」状態には、
 // 対処がまったく違う原因が複数ある。一覧画面からは header 名も Prefix も見えないため、
@@ -80,8 +86,83 @@ function viaCurl(url, body) {
   }
 }
 
+/** GET を curl で行う。プロキシ経由でなければキーが付かないので fetch は使わない。 */
+function curlGet(url) {
+  try {
+    const out = execFileSync('curl', [
+      '-sS', url, '-w', '\n__HTTP_STATUS__%{http_code}', '--max-time', '30',
+    ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    const m = out.match(/\n__HTTP_STATUS__(\d+)$/);
+    return { status: m ? Number(m[1]) : 0, body: m ? out.slice(0, m.index) : out };
+  } catch (e) {
+    return { status: 0, body: `curl 失敗: ${[e.stderr, e.message].filter(Boolean).join(' ')}` };
+  }
+}
+
+/** 各プロバイダに「いま使えるモデル」を聞く。config.json のモデル名はここから選ぶ。 */
+function listModels(config) {
+  line('# 利用可能なモデル一覧');
+  line('');
+  line('config.json の providers.*.tiers.*.model はこの一覧から選ぶこと。');
+  line('');
+
+  for (const [name, provider] of Object.entries(config.providers)) {
+    const host = new URL(provider.endpoint).origin;
+    const url = name === 'gemini' ? `${host}/v1beta/models?pageSize=200` : `${host}/v1/models`;
+    line(`## ${name}  (${url})`);
+
+    const r = curlGet(url);
+    if (r.status !== 200) {
+      line(`  HTTP ${r.status} — ${(r.body || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+      line('');
+      continue;
+    }
+
+    let ids = [];
+    try {
+      const json = JSON.parse(r.body);
+      if (name === 'gemini') {
+        ids = (json.models ?? [])
+          // generateContent に対応しているものだけが ask-llm.mjs から使える
+          .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
+          .map((m) => String(m.name).replace(/^models\//, ''));
+      } else {
+        ids = (json.data ?? []).map((m) => m.id);
+      }
+    } catch {
+      line(`  応答を JSON として解釈できませんでした: ${(r.body || '').slice(0, 200)}`);
+      line('');
+      continue;
+    }
+
+    // 生成用途に使いそうなものを先に出す。埋め込み・音声・画像などは末尾へ。
+    const noise = /embed|tts|whisper|audio|image|dall-e|moderation|vision-preview|aqa|retrieval/i;
+    const primary = ids.filter((i) => !noise.test(i)).sort();
+    const rest = ids.filter((i) => noise.test(i)).sort();
+
+    line(`  生成に使えそうなもの (${primary.length} 件):`);
+    for (const i of primary) {
+      const used = Object.entries(provider.tiers).filter(([, t]) => t.model === i).map(([k]) => k);
+      line(`    ${i}${used.length ? `   ← いま ${used.join(', ')} 階層が指定` : ''}`);
+    }
+    if (rest.length) line(`  その他 (${rest.length} 件): ${rest.slice(0, 12).join(', ')}${rest.length > 12 ? ' …' : ''}`);
+
+    // 設定済みのモデルが実在するかを明示的に突き合わせる
+    line('');
+    for (const [tierName, tier] of Object.entries(provider.tiers)) {
+      const ok = ids.includes(tier.model);
+      line(`  config ${name}:${tierName} = ${tier.model}  → ${ok ? '実在する' : '★この一覧に無い（404 の原因）'}`);
+    }
+    line('');
+  }
+  line('---');
+  line('この出力にキーの値は含まれていません。そのまま貼って共有して構いません。');
+}
+
 async function main() {
   const config = loadConfig();
+
+  if (process.argv.includes('--models')) { listModels(config); return; }
 
   line('# loop-engineering 疎通診断');
   line('');

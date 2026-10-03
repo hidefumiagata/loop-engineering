@@ -39,11 +39,12 @@
         },
         "propose": {
           "enabled": true,
-          "model": "gemini-3.1-pro",
+          "model": "gemini-3.8-flash",
           "price_per_mtok": {
-            "in": 2,
-            "out": 12
-          }
+            "in": 0.75,
+            "out": 3.75
+          },
+          "$comment": "2026-12-31 までの価格。2027-01-01 以降は in 1.50 / out 7.50 に変わるので要更新"
         }
       }
     },
@@ -74,10 +75,10 @@
         },
         "propose": {
           "enabled": true,
-          "model": "gpt-5.2",
+          "model": "gpt-5.5",
           "price_per_mtok": {
-            "in": 1.75,
-            "out": 14
+            "in": 5,
+            "out": 30
           },
           "reasoning_effort": "high"
         }

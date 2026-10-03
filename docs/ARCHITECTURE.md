@@ -181,8 +181,12 @@ Claude はオーケストレータ兼参加者なので、他案を見てから�
 | | 通常レビュー | panel: 提案生成 | panel: 相互評価 |
 | --- | --- | --- | --- |
 | Claude | — | Sonnet / Opus（サブスク） | Sonnet / Opus（サブスク） |
-| Gemini | `gemini-3.1-flash-lite` **無料枠** | `gemini-3.1-pro` 有料 | `gemini-3.1-pro` 有料 |
-| OpenAI | **OFF** (`enabled: false`) | `gpt-5.2` | `gpt-5-mini` |
+| Gemini | `gemini-3.1-flash-lite` **無料枠** | `gemini-3.8-flash` 有料 | `gemini-3.8-flash` 有料 |
+| OpenAI | **OFF** (`enabled: false`) | `gpt-5.5` | `gpt-5-mini` |
+
+> モデル名は **`node loop/bin/doctor.mjs --models` で実在を確認してから** 設定すること。
+> 当初 `gemini-3.1-pro` と書いていたが実在せず、合議が 404 で止まった。
+> Gemini は Flash が 3.8 まで進む一方 Pro は 3.1 preview 止まりだったため、世代の新しい Flash を採った。
 
 ### 実測の根拠
 
@@ -199,11 +203,11 @@ Claude はオーケストレータ兼参加者なので、他案を見てから�
 
 | 参加者 | 提案 | 評価 | 計 |
 | --- | --- | --- | --- |
-| Gemini 3.1 Pro | $0.10 | $0.14 | $0.24 |
-| OpenAI (propose=gpt-5.2 / evaluate=gpt-5-mini) | $0.08 | $0.01 | $0.09 |
-| **合計** | | | **約 $0.33** |
+| Gemini 3.8 Flash ($0.75/$3.75) | $0.023 | $0.031 | $0.054 |
+| OpenAI (propose=gpt-5.5 $5/$30 / evaluate=gpt-5-mini) | $0.170 | $0.010 | $0.180 |
+| **合計** | | | **約 $0.23** |
 
-月4件 × 2ラウンド = 8ラウンドで **約 $2.6/月**。
+月4件 × 2ラウンド = 8ラウンドで **約 $1.9/月**。
 つまり **LLM の API 代は誤差であり、実質的な費用判断は Claude Pro($20) か Max 5x($100) かの一点**である。
 
 ### gpt-5-mini を提案生成に使わない理由

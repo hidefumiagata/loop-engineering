@@ -304,6 +304,7 @@ Issue を1件作る（用途: 合議）。例:
 
 | 症状 | 原因と対処 |
 | --- | --- |
+| **モデル名で 404（`is not found for API version` 等）** | `node loop/bin/doctor.mjs --models` で実際に使えるモデル名を列挙し、そこから `loop/config.json` の `providers.*.tiers.*.model` を直す。資料や記憶から書くと外れる |
 | **他社LLM が呼べない（原因が分からない）** | **まず `node loop/bin/doctor.mjs` を実行する。** Node fetch と curl の両方で叩いて「キー未付与 / キー無効 / ネットワーク拒否 / プロキシ非経由」を切り分ける。キーの値は出力しないのでそのまま共有してよい |
 | `403` + `x-deny-reason: host_not_allowed` | `loop-env` の Network access が Trusted のまま、または credential のホスト指定が違う |
 | Gemini が `API key not valid` | credential の Custom header Prefix に `Bearer` が残っている。**Prefix を空にする** |
