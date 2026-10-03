@@ -290,7 +290,9 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**
    （`min_proposers: 3`。2案の相互批評には決選投票が無く、合議として成立しない）。
    Issue に落ちた提案者と理由を書く。次の run で propose からやり直す。
-5. 3案を A/B/C にランダム割り当てしてリネームし、対応表を書く:
+5. 3案を A/B/C にランダム割り当てしてリネームし、対応表を書く。
+   **`*.meta.json`（コスト記録）も一緒にリネームして残す。削除してはならない。**
+   実コストの監査記録であり、消すと後からコスト表を検証できなくなる:
    ```bash
    # 割り当てはラウンドごとにランダムにする（毎回 claude=A だと著者が推測できる）
    # 例: shuf で順序を決める
@@ -308,6 +310,10 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    - `brief.md` 全文
    - A/B/C の本文（その評価者用の順序で）
    - `.authors.json` は**絶対に含めない**
+
+   **各案の見出しは `## A` のように、ラベル1文字だけにする。**
+   `## 案 A` のような装飾を付けると評価者が `label` に「案 A」を返し、集計が別案として扱う。
+   （集計側でも正規化して吸収するが、そもそも揺らさないのが本筋）
 2. `config.usecases.deliberation.evaluators` の各者を呼ぶ:
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/evaluator.md \
@@ -334,7 +340,10 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    - `panel_round` を +1 し `phase: propose` に戻す（`proposals/` と `evaluations/` は退避して作り直す）
    - Issue に「どの基準も満たせなかったためラウンド2に入る」と書く
 3. そうでなければ `decision.md` を書く。deliberation.md の構成に厳密に従い、
-   **以下3節を省略してはならない:**
+   **以下4節を省略してはならない:**
+   - **各案の要旨** — 人間はここだけを読んで決める。スコアと推奨だけでは判断できない。
+     案ごとに「何をする案か」「他案との違い」「犠牲にしているもの」を書く。
+     ファイルへのリンクだけで済ませてはならない（作業ブランチ上のファイルは読まれない）
    - 不採用案から拾うべき要素
    - 保存すべき反対意見
    - この合議の限界（他社2者が環境に触れていないこと）
@@ -345,7 +354,9 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    **`winner` と `winner_excl_self` が食い違っている場合は、スコア表に両方の順位を並べて示す。**
    総合首位が著者自身の採点で押し上げられている状態なので、どちらを推奨するかの判断根拠を
    質的に説明する（点数の再計算で押し通してはならない）。
-4. commit & push。Issue にスコア表と推奨案、そして `warnings` を投稿する。
+4. commit & push。Issue には **`decision.md` の「各案の要旨」節をそのまま貼る**。
+   そのうえでスコア表・推奨案・`warnings` を載せる。
+   **人間は Issue しか見ないつもりで書くこと。** 作業ブランチ上のファイルを開かせてはならない。
 5. 状態を `phase: handoff`、`awaiting_human: true` にし、`loop:needs-human` を付ける。
    **ここで必ず停止する。合議の結論を自動で確定させてはならない。**
 
@@ -455,7 +466,12 @@ node loop/bin/issue-state.mjs labels <issue> remove loop:go loop:needs-human
 - `main` へ直接 push すること
 - `loop` ラベルが付いていない Issue を触ること
 - Issue を新規作成すること（このループは既存 Issue に応答するだけ）
-- `scores.json` / `*.meta.json` を手で編集すること
+- `scores.json` / `*.meta.json` を手で編集・削除すること
+- **`evaluations/by-*.json` を手で編集すること。** 評価者が返した出力は合議の証跡である。
+  ラベルの表記ゆれやスキーマの軽微なずれは `aggregate.mjs` が吸収して警告に出すので、
+  集計が通らないからといって評価結果を書き換えてはならない。
+  どうしても集計できないなら `loop:blocked` にして人間に渡す
+- `evaluations/` に `by-*.json` 以外のファイルを置くこと（評価者として誤集計されうる）
 - APIキーを探す・表示する・ファイルに書くこと
 - レビュアーや評価者を自分で代行したことを隠すこと
 - 3案揃わない panel を2案で続行すること
