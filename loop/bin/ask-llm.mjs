@@ -309,6 +309,7 @@ export async function askLLM({
   let lastErr;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let res;
+    const startedAt = Date.now();
     try {
       res = curlPostJson(url, {
         headers: { 'content-type': 'application/json', ...headers },
@@ -349,7 +350,16 @@ export async function askLLM({
     }
 
     const bodyText = res.text ?? '';
-    lastErr = new Error(`HTTP ${res.status}: ${bodyText.slice(0, 500)}`);
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    // 所要時間は 502/504 の切り分けに効く。長考がゲートウェイのタイムアウトに
+    // 当たっているのか、即座に蹴られているのかはこの数字でしか分からない。
+    lastErr = new Error(`HTTP ${res.status} (${elapsed}秒): ${bodyText.slice(0, 500)}`);
+    if ((res.status === 502 || res.status === 504) && elapsed >= 45) {
+      lastErr.message += `\n[診断] 応答までに ${elapsed} 秒かかってから ${res.status} になりました。`
+        + 'ゲートウェイのタイムアウトの可能性が高いです。'
+        + `loop/config.json の providers.*.tiers.*.reasoning_effort を下げるか、`
+        + 'より応答の速いモデルに変えてください。';
+    }
 
     const diag = diagnose(res, bodyText, provider, mode);
     if (diag) {
