@@ -265,7 +265,8 @@ export function syncPhase(issue, phase, repo = repoSlug()) {
   if (!PHASE_LABELS.includes(want)) {
     throw new Error(`未知のフェーズ: ${phase} (有効: ${PHASE_LABELS.join(', ')})`);
   }
-  const have = DRY ? [] : currentLabels(issue, repo);
+  // 読み取りは GET なので DRY でも実行する。でないと dry-run が削除対象を表示できない。
+  const have = currentLabels(issue, repo);
   const stale = have.filter((l) => PHASE_LABELS.includes(l) && l !== want);
   removeLabels(issue, stale, repo);
   if (!have.includes(want)) addLabels(issue, [want], repo);
