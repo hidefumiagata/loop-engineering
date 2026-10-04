@@ -11,7 +11,23 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 
 成果物・過程の記録・意思決定記録はすべてこのリポジトリで管理される。
 
-## 2つのモード
+## 2つの動き方
+
+### 定期ジョブ（Issue を使わない）
+
+毎日決まった時刻に同じ仕事をして成果物を作る。`loop/jobs/*.md` に定義を置く。
+反復しない。**PR を作って自動マージする**ので、人間の操作は不要。
+
+| ジョブ | 内容 | 成果物 |
+| --- | --- | --- |
+| `hackernews-top10` | HN トップ10記事の日本語要約 | `daily/hackernews-top10/YYYY-MM-DD.md` |
+| `ai-news-5` | 世界のAIニュース5点の日本語要約 | `daily/ai-news-5/YYYY-MM-DD.md` |
+
+ジョブを足すときは `loop/jobs/` に MD を1枚置くだけ。`enabled: false` で止められる。
+
+### Issue 駆動のループ（2つのモード）
+
+目的を達成するまで反復する。こちらは Issue を起点にする。
 
 ### pipeline — 作って直す
 
@@ -75,12 +91,15 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 ## 構成
 
 ```
-.claude/skills/loop-engine/SKILL.md   ループ手順の唯一の定義。routine はこれを読む
+.claude/skills/loop-engine/SKILL.md   Issue 駆動ループの手順
+.claude/skills/daily-jobs/SKILL.md    定期ジョブの手順（Issue を使わない）
 loop/
   config.json      プラン別プリセット・モデル階層・用途ごとのモード定義
   prompts/roles/      planner worker reviewer proposer challenger reviser critic
   prompts/usecases/   research build ideation deliberation
 .claude/agents/       research-community / research-reconcile / panel-synthesizer
+  jobs/               定期ジョブの定義（MD1枚で1ジョブ）
+  bin/jobs.mjs        ジョブ定義の読み込み
   bin/ask-llm.mjs     他社LLM の REST アダプタ（依存ゼロ）
   bin/aggregate.mjs   合議スコアの機械集計（純関数）
   bin/synthesis-check.mjs 結論の寄与比率を算出し自案への偏りを検出（純関数）
@@ -111,7 +130,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、60件）
+npm test                      # ユニットテスト（キー不要、73件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 
