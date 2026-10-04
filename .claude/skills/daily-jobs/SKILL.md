@@ -130,6 +130,24 @@ echo "PR #$PR"
 
 `gh pr merge` は GraphQL なので使えない。REST の merge を使う。
 
+**まず `mergeable` が算出されるのを待つ。いきなり merge を叩かない。**
+GitHub は PR 作成直後は `mergeable` を `null`（未算出）で返し、その状態で merge を叩くと
+`405 Base branch was modified` で失敗する。**これが自動マージが失敗する主な原因である**
+（実測: PR #17。作成直後は `mergeable=null`、数秒後に `mergeable=true` / `mergeable_state=clean`
+になり、同じ REST 呼び出しがそのまま成功した）。
+
+```bash
+# mergeable が null でなくなるまで待つ（最大30秒）。null は「まだ計算中」の意味
+for i in 1 2 3 4 5 6; do
+  MERGEABLE=$(gh api "repos/$REPO/pulls/$PR" --jq '.mergeable | tostring')
+  [ "$MERGEABLE" != "null" ] && break
+  sleep 5
+done
+echo "mergeable=$MERGEABLE"
+```
+
+`mergeable=false` なら衝突している。再試行しても直らないのでマージを諦める。
+
 ```bash
 cat > /tmp/merge.json <<EOF
 { "merge_method": "squash", "commit_title": "daily($DATE): 定期ジョブの成果物 (#$PR)" }
@@ -137,18 +155,34 @@ EOF
 gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json --jq '{merged, sha}'
 ```
 
-**作成直後は `405 Base branch was modified` や `mergeable` 未算出で失敗することがある。**
-GitHub がマージ可否を計算するまで数秒かかるため。失敗したら **5秒待って最大3回**まで再試行する。
-3回とも失敗したら**マージを諦めて PR を残し**、実行ログと通知にその旨を書く。
-成果物は PR に残っているので失われない。
+**失敗したら 5秒待って最大3回まで再試行する。** 試行回数で数える。経過時間で打ち切らない
+（`$SECONDS` はシェルの起動からの秒数なので、シェルが生きていると初回で打ち切られる）。
 
 ```bash
-# 再試行の例（前景で sleep を連ねない。until ループで待つ）
-until gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json >/dev/null 2>&1; do
-  [ $SECONDS -gt 60 ] && break
+MERGED=no
+for i in 1 2 3; do
+  if gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json > /tmp/merge-out.json 2>/tmp/merge-err.txt; then
+    MERGED=yes; break
+  fi
+  cat /tmp/merge-err.txt   # ★ 失敗の本文を必ず出す。捨ててはならない
   sleep 5
 done
+echo "merged=$MERGED"
 ```
+
+**エラー本文を `>/dev/null` で捨ててはならない。** 捨てると、次に失敗したときに
+`mergeable` 未算出なのか衝突なのか権限なのかを誰も切り分けられない。
+
+3回とも失敗したら**マージを諦めて PR を残す**。成果物は PR に残っているので失われない。
+**そのうえで、諦めた事実を記録する:**
+
+1. `daily/_log/$DATE.md` の末尾に「マージできなかった旨とエラー本文」を追記する
+2. `git commit` して `git push`（**ブランチはそのまま。PR は作り直さない**）
+3. Step 6 の通知にも書く
+
+> **Step 4 でログを書いた時点ではマージ結果はまだ分からない。**
+> だからマージを諦めたときだけ、ログに1回だけ追記して push する。
+> この追記を省くと「PR が残っているが理由がどこにも無い」状態になる。
 
 マージ後、ブランチはリポジトリ設定（`delete_branch_on_merge`）で自動削除される。
 自分で削除しなくてよい。
