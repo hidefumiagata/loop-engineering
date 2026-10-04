@@ -1,0 +1,3 @@
+{"issue":10,"mode":"panel","usecase":"deliberation","phase":"propose","iteration":1,"panel_round":1,"max_iterations":5,"slug":"0010-ai-cicd","branch":"claude/loop-10-ai-cicd","pr":null,"awaiting_human":false,
+"artifacts":["brief.md","criteria.json"],
+"history":[{"n":1,"kind":"brief","by":"claude","at":"2026-10-04","cost_usd":0.0009}],"updated_at":"2026-10-04T00:00:00Z"}
