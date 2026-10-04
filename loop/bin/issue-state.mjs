@@ -83,10 +83,10 @@ export function repoSlug() {
 const REQUIRED = ['issue', 'usecase', 'mode', 'slug', 'branch', 'phase', 'iteration', 'max_iterations'];
 const PHASES = {
   pipeline: ['plan', 'work', 'review', 'done', 'blocked'],
-  // panel は「案を選ぶ」のではなく「3案を読んで答えを作る」。
-  // synthesize で Claude が答えを書き、critique で他2者が検品する。
-  // 実装への引き継ぎは無いので handoff / decide は存在しない。
-  panel: ['brief', 'propose', 'evaluate', 'synthesize', 'critique', 'done', 'blocked'],
+  // panel は4段。3者が意見を出し（propose）、自分以外を敵対的レビューし（challenge）、
+  // 指摘を受けて各自が改稿し（revise）、Claude の別サブエージェントが結論をまとめる（synthesize）。
+  // 採点は行わない。評価の役割は敵対的レビューが担う。
+  panel: ['brief', 'propose', 'challenge', 'revise', 'synthesize', 'done', 'blocked'],
 };
 
 export function validateState(s) {

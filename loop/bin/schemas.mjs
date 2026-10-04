@@ -68,35 +68,42 @@ export const SCHEMAS = {
     },
   },
 
-  // panel: 相互評価
-  evaluation: {
-    name: 'loop_evaluation',
+  // panel: 敵対的レビュー（自分以外の案を攻撃する）
+  challenge: {
+    name: 'loop_challenge',
     schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['proposals', 'evaluator_notes'],
+      required: ['targets', 'reviewer_notes'],
       properties: {
-        proposals: arr({
+        targets: arr({
           type: 'object',
           additionalProperties: false,
-          required: ['label', 'criteria', 'biggest_concern', 'overall_comment'],
+          required: ['label', 'severity', 'fatal_flaws', 'unsupported_assumptions', 'missed_risks', 'strongest_point'],
           properties: {
-            label: str('提案のラベル。提示されたとおりに返す'),
-            criteria: arr({
+            label: str('攻撃対象の案のラベル。提示されたとおりに返す'),
+            severity: {
+              type: 'string',
+              enum: ['致命的', '要修正', '軽微'],
+              description: '致命的=前提が崩れており書き直しが要る / 要修正=穴はあるが直せる / 軽微=細部のみ',
+            },
+            fatal_flaws: arr({
               type: 'object',
               additionalProperties: false,
-              required: ['id', 'score', 'justification'],
+              required: ['claim', 'why', 'affected_criteria'],
               properties: {
-                id: str('brief.md の評価基準ID'),
-                score: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=基準を全く満たさない 5=申し分なく満たす' },
-                justification: str('その点数にした根拠。提案の該当箇所を引用すること'),
+                claim: str('その案のどの主張が問題か。本文から短く引用する'),
+                why: str('なぜ成り立たないのか。反例・条件・見落としを具体的に'),
+                affected_criteria: arr(str(), 'この欠陥によって満たせなくなる brief.md の基準ID。無ければ空配列'),
               },
-            }, 'brief.md の全評価基準IDを必ず網羅する'),
-            biggest_concern: str('この案を採用した場合に最も危険だと思う点を1つ'),
-            overall_comment: str('総評を3文以内で'),
+            }, 'その案が壊れる箇所。無ければ空配列にする。無理にひねり出さない'),
+            unsupported_assumptions: arr(str(), '根拠なく前提にされていること。ブリーフの前提事実に無いもの'),
+            missed_risks: arr(str(), 'その案が触れていないが、採用すると実際に起きる問題'),
+            strongest_point: str('★必須。その案の最も強い点。攻撃対象であっても認める。'
+              + '全否定は批評の放棄であり、統合役が何を残すべきか判断できなくなる'),
           },
-        }, '提示された全提案について、提示順どおりに返す'),
-        evaluator_notes: str('採点全体に関する補足。どの案も満たせていない基準があればここに書く'),
+        }, '提示された全ての案について返す。**自分が書いた案は提示されない**'),
+        reviewer_notes: str('全体への補足。どの案も触れていない論点があればここに書く'),
       },
     },
   },

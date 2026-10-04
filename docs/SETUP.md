@@ -177,7 +177,7 @@ curl -X POST https://api.anthropic.com/v1/claude_code/routines/<ROUTINE_ID>/fire
 npm test
 ```
 
-50件すべて pass すること。`aggregate.mjs` と `issue-state.mjs` の純粋な部分に加え、
+すべて pass すること。`synthesis-check.mjs` と `issue-state.mjs` の純粋な部分に加え、
 設定・プロンプト・Issueテンプレート・ラベル定義の整合性（wiring）も検証する。
 
 ### 7-2. アダプタの疎通（キーが必要）

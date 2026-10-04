@@ -10,7 +10,7 @@
 //   そこで統合役に provenance.json（答案の要素 → 由来する案）を宣言させ、
 //   寄与比率をここで算出する。Claude は synthesis-check.json を参照するだけで書き換えない。
 //
-// aggregate.mjs と同じく純関数に保つ。ネットワークも LLM も使わない。
+// 純関数に保つ。ネットワークも LLM も使わない。だからユニットテストで検証できる。
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

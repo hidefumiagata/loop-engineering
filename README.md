@@ -30,30 +30,29 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 
 突き合わせ役には Web ツールを与えていない。追加調査で穴を埋められると照合の意味が消えるため。
 
-### panel — 3つのLLMで合議する
+### panel — 3つのLLMで議論して結論を出す
 
-アーキテクチャ検討のように「正解が1つに決まらないが、決めなければ進めない」課題。
+```
+1. propose     Claude / ChatGPT / Gemini がそれぞれ意見を出す
+2. challenge   自分以外の案を敵対的にレビューする
+3. revise      指摘を受けて各自が自分の案の精度を高める
+4. synthesize  Claude の別エージェントが3つの回答をまとめ、結論を出す
+```
 
-Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿名で採点し、
-それを全部読んだ Claude が1つの答えに統合する**。最後に他の2者がその答えを批評する。
-
-**どれを採るかを人間に選ばせる仕組みではない。** 成果物は統合された答えそのもので、読めば終わる。
-最後に PR を作るので、答えを main に残すかどうかだけ人間が決める。
+**採点はしない。** 点数は「どれが良いか」しか言わないが、敵対的レビューは「どこが壊れるか」を言う。
+後者のほうが、改稿にも統合にも使える。
 
 公平性のために埋め込んでいる仕組み:
 
-- **共有ブリーフが唯一の事実源。** 他社2者は実行環境のファイルもWebも見られない。
+- **共有ブリーフが唯一の事実源。** 他社2者は実行環境もWebも見られないので、
   Claude が先に調べた事実を全員に配り、同一の証拠・異なる推論に揃える
-- **Claude の案は他案取得前に単独コミットする。** git 履歴が独立性の証跡になる
-- **提案は匿名化し、提示順を評価者ごとにシャッフルする**
-- **集計は `loop/bin/aggregate.mjs` が機械的に行う。** Claude は `scores.json` を参照のみ。
-  自己採点バイアスと評価者間一致度も自動で測る
-- **統合答案の寄与比率を `loop/bin/synthesis-check.mjs` が機械的に算出する。**
-  Claude は3案のうち1つを自分で書いているため、統合が「自案に飾りを付けただけ」に
-  なっていないかを外から検証できるようにしている。偏れば警告が出る
-- **統合答案は他の2者が批評する。** 自分の答えを自分で検品させない。
-  批評者が最も見るのは「統合によって失われたもの」
-- **見解が割れた点・取り込まなかった要素・限界を `answer.md` に必ず残す**
+- **Claude の案は他案取得前に単独コミット。** git 履歴が独立性の証跡になる
+- **攻撃者に自分の案を渡さない。** 自己批判か自己弁護にしかならない
+- **改稿者に他案を渡さない。** 寄せにいくと3つの独立した答えという前提が崩れる
+- **全否定を禁じる。** 攻撃対象の「最も強い点」を必ず認めさせる。
+  攻撃者自身も案を書いた当事者なので、他案を一律に潰す動機を構造的に持っている
+- **統合は別のサブエージェント。** 独立した文脈で起動し、どれが本体の案かを知らせない
+- **寄与比率を機械算出。** 結論が自案に偏っていれば警告し、サブエージェントに差し戻す
 
 ## 使い方
 
@@ -79,12 +78,12 @@ Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿�
 .claude/skills/loop-engine/SKILL.md   ループ手順の唯一の定義。routine はこれを読む
 loop/
   config.json      プラン別プリセット・モデル階層・用途ごとのモード定義
-  prompts/roles/      planner worker reviewer proposer evaluator synthesizer critic
+  prompts/roles/      planner worker reviewer proposer challenger reviser critic
   prompts/usecases/   research build ideation deliberation
-.claude/agents/       research-community / research-reconcile（技術調査のサブエージェント）
+.claude/agents/       research-community / research-reconcile / panel-synthesizer
   bin/ask-llm.mjs     他社LLM の REST アダプタ（依存ゼロ）
   bin/aggregate.mjs   合議スコアの機械集計（純関数）
-  bin/synthesis-check.mjs 統合答案の寄与比率を算出し自案への偏りを検出（純関数）
+  bin/synthesis-check.mjs 結論の寄与比率を算出し自案への偏りを検出（純関数）
   bin/issue-state.mjs Issue コメントへの状態の読み書き
   test/               aggregate / issue-state / 設定整合性(wiring) のテスト
 projects/<Issue番号>-<スラグ>/          成果物と過程の記録
@@ -112,7 +111,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、76件）
+npm test                      # ユニットテスト（キー不要、60件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 

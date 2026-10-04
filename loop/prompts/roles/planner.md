@@ -31,7 +31,7 @@ Issue 本文に書かれた「やりたいこと」を、**機械的に検証で
    黙って無視してはならない。
 5. pipeline なら `plan.md`、panel なら `brief.md` + `criteria.json` に書き出す。
    `criteria.json` は `[{"id","text","weight"}]` の配列で、`brief.md` 本文の基準表と**必ず一致させる**
-   （`aggregate.mjs` は `criteria.json` のみを読む）。
+   （敵対的レビューは「どの基準を満たせなくなるか」で攻撃するため、基準が曖昧だと攻撃も曖昧になる）。
 
 ## 禁止事項
 

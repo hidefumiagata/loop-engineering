@@ -17,7 +17,8 @@ routine の保存プロンプトは「このファイルを読んで従え」と
    人間に渡す。自分で決めてよいのは手順書が委ねている範囲だけ。
 3. **他社LLMの呼び出しは必ず `node loop/bin/ask-llm.mjs` 経由。** 自分で `curl` を書いてはならない。
    APIキーはサンドボックス内に存在しない（Anthropic のプロキシが付与する）。キーを探さない、ログに出さない。
-4. **`scores.json` を書き換えない。** あれは `aggregate.mjs` の出力である。数値を引用するときは必ずそこから取る。
+4. **機械集計の出力を書き換えない。** `synthesis-check.json` は `synthesis-check.mjs` の出力である。
+   数値を引用するときは必ずそこから取る。
 5. **Issue に成果物の内容を書かない。** Issue は「目的」と「状態」の置き場であって、成果物の置き場ではない。
    調査結果・レポート本文・合議の答え・案の要旨・スコア表・比較表などを
    Issue コメントに貼ってはならない。**成果物はリポジトリにあり、読む場所は PR である。**
@@ -68,7 +69,7 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 
 | granularity | 1 run でやること |
 | --- | --- |
-| `iteration` | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→synthesize→critique。**run が少ないとき向け** |
+| `iteration` | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→challenge→revise→synthesize。**run が少ないとき向け** |
 | `phase` | フェーズを1つだけ実行して終える。**run が潤沢なとき向け**（毎時実行など）。1 run が短くなるのでトークン枠を食い潰しにくい |
 
 `list` が空なら、**何もせずに終了する**。Issue も作らない。リトライループも組まない。
@@ -280,21 +281,28 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 `loop/prompts/usecases/deliberation.md` を**必ず読んでから**作業する。
 以下は実行順の骨格であり、各フェーズの中身の規律はそちらにある。
 
+```
+brief → propose → challenge → revise → synthesize → done
+        3者が      自分以外を   指摘を受けて  別エージェントが
+        意見を出す  敵対的に攻撃 各自が改稿   結論をまとめる
+```
+
+**採点はしない。** 評価の役割は敵対的レビュー（challenge）が担う。
+
 ### phase: brief
 
 1. `loop/prompts/roles/planner.md` と deliberation.md の brief 節に従い `projects/<slug>/brief.md` を書く。
    **「前提事実」節に、自分が調べた事実をすべて展開する。** Gemini と OpenAI はここに無いことを知りえない。
 2. 同じ基準を `projects/<slug>/criteria.json` に `[{"id","text","weight"}]` で書き出す。
-   `brief.md` の表と**1件もずれていないこと**を自分で確認する（`aggregate.mjs` は json のみ読む）。
+   敵対的レビューは「どの基準を満たせなくなるか」で攻撃するため、基準が曖昧だと攻撃も曖昧になる。
 3. `gemini:review` に `critique` スキーマで基準を批評させ、取り込む。
 4. commit & push。**Issue には投稿しない。** `brief.md` はブランチ上にあり、PR で読める。
-   人間が軌道修正したいときは `brief.md` を直接見る。
 5. 状態を `phase: propose`、`panel_round: 1` にする。
 
 `granularity: iteration` でも **brief の後は一度 run を終える。**
 ブリーフは人間が目を通す価値がある分岐点であり、ここで止めることに意味がある。
 
-### phase: propose
+### phase: propose（3者が意見を出す）
 
 **この順序を守る。git 履歴が独立性の証跡になる。**
 
@@ -306,15 +314,10 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    git commit -m "propose(#<issue>): claude の案（他案取得前の単独コミット）"
    git push
    ```
-3. その後で他の提案者を呼ぶ。`config.usecases.deliberation.proposers` から `claude` 以外を取る。
+3. その後で他の提案者を呼ぶ。`config.usecases.<usecase>.proposers` から `claude` 以外を取る。
 
-   > **提案の生成は数分かかることがある。** エージェントプロキシは1リクエスト約30秒で諦めるため、
-   > `openai:propose` は `background: true` で非同期化してあり、`ask-llm.mjs` が内部でポーリングする
-   > （最大 420 秒。`--max-wait` で変更可）。
-   > **この呼び出しは Bash の `run_in_background: true` で実行すること。**
-   > 前景で実行すると 120 秒で打ち切られ、`sleep` での待機は禁止されているため扱いに困る。
-   > 完了通知を受けてから結果ファイルを読む。
-
+   > **提案の生成は数分かかる。** `openai:propose` は `background: true` で非同期化してあり、
+   > `ask-llm.mjs` が内部でポーリングする。**Bash の `run_in_background: true` で実行すること。**
 
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/proposer.md \
@@ -324,118 +327,107 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
      --input projects/<slug>/brief.md --max-output-tokens 8000 \
      --out projects/<slug>/proposals/_openai.md
    ```
-4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**
-   （`min_proposers: 3`。2案の相互批評には決選投票が無く、合議として成立しない）。
-   Issue に落ちた提案者と理由を書く。次の run で propose からやり直す。
-5. 3案を A/B/C にランダム割り当てしてリネームし、対応表を書く。
+4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**（`min_proposers: 3`）。
+   敵対的レビューは「自分以外の2案を攻撃する」形なので、2案だと各自が1案しか攻撃できず、
+   攻撃の重なりが消えて検証にならない。
+5. 3案を A/B/C に**ランダム割り当て**してリネームし、対応表を書く。
    **`*.meta.json`（コスト記録）も一緒にリネームして残す。削除してはならない。**
-   実コストの監査記録であり、消すと後からコスト表を検証できなくなる:
-   ```bash
-   # 割り当てはラウンドごとにランダムにする（毎回 claude=A だと著者が推測できる）
-   # 例: shuf で順序を決める
-   ```
    - `proposals/A.md` `B.md` `C.md`
-   - `proposals/.authors.json` = `{"A":"gemini","B":"claude","C":"openai"}` のような対応表
+   - `proposals/.authors.json` = `{"A":"gemini","B":"claude","C":"openai"}`
    - 匿名化前のファイル（`claude.md` `_gemini.md` `_openai.md`）は**削除する**
-6. 各案の冒頭に著者を示す記述が残っていないか確認する（モデルが「私は Gemini です」と書く場合がある）。
-   あれば削る。
-7. 状態を `phase: evaluate` にする。
+6. 各案の冒頭に著者を示す記述が残っていないか確認する（「私は Gemini です」等）。あれば削る。
+7. 状態を `phase: challenge` にする。
 
-### phase: evaluate
+### phase: challenge（自分以外を敵対的レビュー）
 
-1. 評価者ごとに**提示順をシャッフルした**パケットを作る（`/tmp/eval-packet-<評価者>.md`）。中身:
+**各者には「自分が書いた案を除いた2案」だけを渡す。** ここが最も間違えやすい。
+`.authors.json` を見て、その者が書いた案を**必ず除外**する。自分の案を攻撃させると
+自己批判か自己弁護のどちらかになり、どちらも議論にならない。
+
+1. 攻撃者ごとにパケットを作る（`/tmp/challenge-packet-<攻撃者>.md`）。中身:
    - `brief.md` 全文
-   - A/B/C の本文（その評価者用の順序で）
-   - `.authors.json` は**絶対に含めない**
-
-   **各案の見出しは `## A` のように、ラベル1文字だけにする。**
-   `## 案 A` のような装飾を付けると評価者が `label` に「案 A」を返し、集計が別案として扱う。
-   （集計側でも正規化して吸収するが、そもそも揺らさないのが本筋）
-2. `config.usecases.deliberation.evaluators` の各者を呼ぶ:
+   - **その攻撃者が書いた案を除いた2案**の本文。見出しは `## A` のようにラベル1文字だけ
+   - `.authors.json` は**渡さない**（誰の案かは伏せたまま）
+   - 提示順は攻撃者ごとにシャッフルする
+2. 呼ぶ。スキーマは `challenge`:
    ```bash
-   node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/evaluator.md \
-     --input /tmp/eval-packet-gemini.md --schema evaluation \
-     --out projects/<slug>/evaluations/by-gemini.json
-   node loop/bin/ask-llm.mjs --spec openai:evaluate --system loop/prompts/roles/evaluator.md \
-     --input /tmp/eval-packet-openai.md --schema evaluation \
-     --out projects/<slug>/evaluations/by-openai.json
+   node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/challenger.md \
+     --input /tmp/challenge-packet-gemini.md --schema challenge \
+     --out projects/<slug>/challenges/by-gemini.json
+   node loop/bin/ask-llm.mjs --spec openai:propose --system loop/prompts/roles/challenger.md \
+     --input /tmp/challenge-packet-openai.md --schema challenge \
+     --out projects/<slug>/challenges/by-openai.json
    ```
-3. Claude 自身も `evaluator.md` に従い、**同じスキーマで**採点して
-   `projects/<slug>/evaluations/by-claude.json` に書く。自分の案も採点する
-   （自己採点バイアスは `aggregate.mjs` が測るので、避けずに採点してよい）。
-4. 状態を `phase: synthesize` にする。
+3. Claude 自身も `challenger.md` に従い、**自分の案を除いた2案**を同じスキーマで攻撃し
+   `challenges/by-claude.json` に書く。
+4. **`*.meta.json` は `challenges/` に置かない。** `journal/` に移す
+   （`by-*.json` の glob に `by-*.json.meta.json` が引っかかるため）。
+5. 攻撃者が欠けた場合は**停止しない**。欠けた事実を記録して進む。
+   提案と違い、攻撃の欠落は議論を無効にはしない（その案への攻撃が1件減るだけ）。
+6. 状態を `phase: revise` にする。
 
-### phase: synthesize（aggregate を含む。**ここが成果物**）
+### phase: revise（指摘を受けて各自が改稿）
 
-**案を選ぶのではない。3案を読んで答えを作り直す。**
-「案Bを推奨する」は答えではない。読者が知りたいのはテーマへの答えであって、どの案が勝ったかではない。
+**各者には「自分の案」と「自分の案への指摘」だけを渡す。他案は渡さない。**
+他案を見せると寄せにいってしまい、3つの独立した答えという前提が崩れる。
 
-1. 集計する。**出力を手で触らない:**
+1. 改稿者ごとにパケットを作る（`/tmp/revise-packet-<改稿者>.md`）。中身:
+   - `brief.md` 全文
+   - **その者が書いた案**（`.authors.json` で特定する）
+   - `challenges/by-*.json` から、**その案を対象とした指摘だけ**を抜き出したもの。
+     誰の指摘かは伏せ、`批評者1` `批評者2` として示す
+2. 呼ぶ。スキーマは**使わない**（改稿後の案を Markdown で返させる）:
    ```bash
-   node loop/bin/aggregate.mjs --dir projects/<slug>
+   node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/reviser.md \
+     --input /tmp/revise-packet-gemini.md --max-output-tokens 8000 \
+     --out projects/<slug>/proposals/<geminiのラベル>.v2.md
    ```
-2. `scores.json` の `unmet_criteria` に重み3の基準が含まれていて、
-   `panel_round < config.defaults.max_panel_rounds` なら:
-   - ギャップを `brief.md` の「前提事実」に追記する
-   - `panel_round` を +1 し `phase: propose` に戻す（`proposals/` と `evaluations/` は退避して作り直す）
-   - Issue に「どの基準も満たせなかったためラウンド2に入る」と書いて、この run を終える
-3. そうでなければ `loop/prompts/roles/synthesizer.md` に従い
-   `answer.md` と `provenance.json` を書く。構成は deliberation.md の `answer.md` 節に厳密に従う。
-   **以下5節を省略してはならない:**
-   - **答え**（結論を先に）／**本論**
-   - **3者が一致した点** — 独立した3モデルが同じ結論に達した部分。最も確度が高い
-   - **見解が割れた点** — 空にしてはならない。無理に一本化しない
-   - **取り込まなかった要素** — なぜ不要と判断したか。黙って落とすのが最も疑わしい
-   - **この答えの限界** — `scores.json` と `synthesis-check.json` の `warnings` を全件列挙する
-4. **自案への偏りを機械的に確認する:**
+   OpenAI も同様（`run_in_background: true` で実行する）。
+3. Claude 自身も `reviser.md` に従って自案を改稿し `<claudeのラベル>.v2.md` に書く。
+4. 改稿が取得できなかった案は、**初稿をそのまま `.v2.md` にコピーする**。
+   欠けたままにすると統合役の入力が揃わない。コピーした事実を `journal` に書く。
+5. 状態を `phase: synthesize` にする。
+
+### phase: synthesize（別エージェントが結論をまとめる）
+
+**ここが成果物である。そして、あなた自身は書かない。**
+
+3案のうち1つはあなたが書いている。あなたが統合すると自案を土台にする動機が構造的に残る。
+`panel-synthesizer` サブエージェントは独立した文脈で起動され、どれがあなたの案かを知らない。
+
+1. `panel-synthesizer` サブエージェントを起動する。渡すもの:
+   - `brief.md` のパス
+   - `proposals/A.v2.md` `B.v2.md` `C.v2.md` のパス（**改稿後**を渡す。初稿ではない）
+   - `challenges/by-*.json` のパス
+   - 出力先 `projects/<slug>/answer.md` と `projects/<slug>/provenance.json`
+
+   **`.authors.json` のパスは渡さない。内容も伝えない。**
+   「どれがあなたの案か」を示唆する発言もしない。
+
+2. **自案への偏りを機械的に確認する:**
    ```bash
    node loop/bin/synthesis-check.mjs --dir projects/<slug>
    ```
-   **偏りが警告されたら `answer.md` を書き直す。** 言い訳を添えて通してはならない。
+   偏りが警告されたら、**サブエージェントに差し戻して書き直させる**（警告文をそのまま渡す）。
+   あなたが自分で直してはならない。直した時点で別エージェントである意味が消える。
    `synthesis-check.json` は手で編集しない。
-5. commit & push。状態を `phase: critique` にする。
 
-### phase: critique（他の2者に検品させる）
+3. commit & push。
 
-統合役は参加者でもある。自分で書いた答えを自分で検品しても意味がない。
-
-1. パケットを作る: `brief.md` + `answer.md` + `provenance.json`。
-   **`.authors.json` は渡さない。**
-2. `config.usecases.<usecase>.critics` の各者を呼ぶ:
+4. **PR を作る**（pipeline の work フェーズと同じ REST 呼び出し）:
    ```bash
-   node loop/bin/ask-llm.mjs --spec gemini:review --system loop/prompts/roles/critic.md \
-     --input /tmp/critique-packet.md --schema verdict \
-     --out projects/<slug>/journal/NNN-critique-gemini.json
-   node loop/bin/ask-llm.mjs --spec openai:evaluate --system loop/prompts/roles/critic.md \
-     --input /tmp/critique-packet.md --schema verdict \
-     --out projects/<slug>/journal/NNN-critique-openai.json
+   REPO=$(node -e "import('./loop/bin/issue-state.mjs').then(m=>console.log(m.repoSlug()))")
+   cat > /tmp/pr.json <<'EOF'
+   { "title": "deliberation(#<issue>): <テーマ>", "head": "<branch>", "base": "main",
+     "body": "Issue #<issue> の合議の結論。\n\n- 結論: projects/<slug>/answer.md\n- 寄与比率: A xx% / B xx% / C xx%（synthesis-check.json）\n- 敵対的レビューの severity: A <値> / B <値> / C <値>\n\nCloses #<issue>" }
+   EOF
+   gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number
    ```
-3. 判定に従う。
+   PR 本文には**結論の要旨・寄与比率・severity** を載せる。
+   マージする人が「何が結論か」「自案に偏っていないか」「どの案が攻撃に耐えたか」を
+   PR 画面だけで判断できるようにする。
 
-| 批評の結果 | 対応 |
-| --- | --- |
-| 全員 `PASS` | 完了。下記の終了処理へ |
-| いずれかが `REVISE` | `gaps` を反映して `answer.md` を直し、**同じラウンド内で1回だけ**再批評する。2回目も `REVISE` なら、残った指摘を「この答えの限界」に書いて完了にする（無限に回さない） |
-| いずれかが `BLOCKED` | 素材が足りない。ギャップを `brief.md` に追記し `panel_round` を +1 して `phase: propose` へ（上限まで） |
-| 429/5xx で取得できない | **停止しない。** 取得できなかった事実を「この答えの限界」に明記して完了にする。提案と違い、批評の欠落は答えを無効にしない |
-
-4. 終了処理:
-   - **Issue に `answer.md` を貼らない。** 答えは PR で読む
-   - **PR を作る**（pipeline の work フェーズと同じ REST 呼び出し）。
-     答えは読んで終わりだが、**成果物が作業ブランチに取り残されると参照できなくなる**。
-     main に入れるかどうかは人間が決める:
-     ```bash
-     REPO=$(node -e "import('./loop/bin/issue-state.mjs').then(m=>console.log(m.repoSlug()))")
-     cat > /tmp/pr.json <<'EOF'
-     { "title": "deliberation(#<issue>): <テーマ>", "head": "<branch>", "base": "main",
-       "body": "Issue #<issue> の合議の答え。\n\n- 答え: projects/<slug>/answer.md\n- 寄与比率: A xx% / B xx% / C xx%（synthesis-check.json）\n- 批評: gemini <判定> / openai <判定>\n\nCloses #<issue>" }
-     EOF
-     gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number
-     ```
-     PR 本文には**寄与比率と批評の判定を必ず載せる**。マージする人が、答えが
-     自案に偏っていないか・批評で何が残ったかを PR 画面だけで判断できるようにする。
-     作成した PR 番号を状態の `pr` に入れる。
-   - `phase: done`、`loop:done`。**マージはしない。人間に委ねる**
+5. `phase: done`、`loop:done`。**マージはしない。人間に委ねる**
 
 **`require_human_decision` は `false`。承認待ちで止めない。**
 人間が追加の論点や反証を Issue にコメントし `loop:go` を付けたら、
@@ -490,7 +482,7 @@ node loop/bin/issue-state.mjs write <issue> /tmp/state.json
 | research | `["report.md", "sources.md"]` |
 | build | `["src/README.md"]` |
 | ideation | `["report.md"]` |
-| deliberation | `["answer.md", "scores.json", "synthesis-check.json"]` |
+| deliberation | `["answer.md", "synthesis-check.json"]` |
 
 中間ファイル（`findings/` や `journal/`）は入れない。一式は「一式」行のリンクから辿れる。
 **Issue に本文を貼らない代わりに、リンクで辿れるようにするのがこの欄の役目である。**
@@ -536,13 +528,16 @@ node loop/bin/issue-state.mjs labels <issue> remove loop:go loop:needs-human
 - `main` へ直接 push すること
 - `loop` ラベルが付いていない Issue を触ること
 - Issue を新規作成すること（このループは既存 Issue に応答するだけ）
-- `scores.json` / `*.meta.json` を手で編集・削除すること
-- **`evaluations/by-*.json` を手で編集すること。** 評価者が返した出力は合議の証跡である。
-  ラベルの表記ゆれやスキーマの軽微なずれは `aggregate.mjs` が吸収して警告に出すので、
-  集計が通らないからといって評価結果を書き換えてはならない。
-  どうしても集計できないなら `loop:blocked` にして人間に渡す
-- `evaluations/` に `by-*.json` 以外のファイルを置くこと（評価者として誤集計されうる）
+- `synthesis-check.json` / `*.meta.json` を手で編集・削除すること
+- **`challenges/by-*.json` を手で編集すること。** 攻撃者が返した出力は議論の証跡である。
+  スキーマの軽微なずれで扱いに困るなら `loop:blocked` にして人間に渡す
+- `challenges/` に `by-*.json` 以外のファイルを置くこと（`*.meta.json` は `journal/` へ）
+- **攻撃者に自分の案を渡すこと。** 自己批判か自己弁護にしかならず、議論にならない
+- **改稿者に他案を渡すこと。** 寄せにいってしまい、3つの独立した答えという前提が崩れる
+- **統合を自分でやること。** `panel-synthesizer` サブエージェントの仕事である。
+  偏りを指摘されたときも、自分で直さずサブエージェントに差し戻す
+- **`.authors.json` を攻撃者・改稿者・統合役に渡すこと**（改稿者には自分の案だけを渡す。
+  どれが自分の案かは呼び出し側が `.authors.json` で特定し、本人には伝えない）
 - APIキーを探す・表示する・ファイルに書くこと
-- レビュアーや評価者を自分で代行したことを隠すこと
+- レビュアーや攻撃者を自分で代行したことを隠すこと
 - 3案揃わない panel を2案で続行すること
-- 合議の結論を人間の確定なしに実装へ進めること

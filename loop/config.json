@@ -121,25 +121,26 @@
       "mode": "panel",
       "label": "use:deliberation",
       "deliverable": "answer.md",
+      "$comment": "1.3者が意見を出す 2.自分以外を敵対的レビュー 3.レビューを受けて改稿 4.Claudeの別エージェントが結論をまとめる",
       "proposers": [
         "claude",
         "gemini:propose",
         "openai:propose"
       ],
-      "evaluators": [
+      "challengers": [
         "claude",
         "gemini:propose",
-        "openai:evaluate"
+        "openai:propose"
       ],
+      "revisers": [
+        "claude",
+        "gemini:propose",
+        "openai:propose"
+      ],
+      "synthesizer": "subagent:panel-synthesizer",
       "planner_critic": "gemini:review",
       "min_proposers": 3,
-      "require_human_decision": false,
-      "synthesizer": "claude",
-      "critics": [
-        "gemini:review",
-        "openai:evaluate"
-      ],
-      "$comment": "選択ではなく統合。3者の案と相互評価を読んで Claude が答えを書き、他2者が批評する"
+      "require_human_decision": false
     }
   }
 }

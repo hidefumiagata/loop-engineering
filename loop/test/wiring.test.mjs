@@ -119,7 +119,7 @@ test('クラウドで 403 になる GraphQL 経路の gh コマンドを使っ�
     ['.claude/skills/loop-engine/SKILL.md', SKILL],
     ['loop/bin/issue-state.mjs', read('loop/bin/issue-state.mjs')],
     ['loop/bin/ask-llm.mjs', read('loop/bin/ask-llm.mjs')],
-    ['loop/bin/aggregate.mjs', read('loop/bin/aggregate.mjs')],
+    ['loop/bin/synthesis-check.mjs', read('loop/bin/synthesis-check.mjs')],
     ['loop/prompts/roles/worker.md', read('loop/prompts/roles/worker.md')],
     ['loop/prompts/usecases/deliberation.md', read('loop/prompts/usecases/deliberation.md')],
   ];
@@ -319,31 +319,69 @@ test('SKILL.md が jq に依存していない（サンドボックスに保証�
   assert.doesNotMatch(SKILL, /\bjq\b\s+-/, 'SKILL.md が jq を使っている。node -e で読むこと');
 });
 
-test('panel 用途は3者の案と、統合答案への外部批評を備えている', () => {
+test('panel 用途は4段（提案・敵対的レビュー・改稿・統合）を備えている', () => {
   for (const [name, uc] of Object.entries(config.usecases)) {
     if (uc.mode !== 'panel') continue;
 
+    // 1. 3者が意見を出す
     assert.ok(uc.proposers?.length >= 3, `${name} の proposers が3者未満`);
-    assert.ok(uc.evaluators?.length >= 3, `${name} の evaluators が3者未満`);
-    assert.equal(uc.min_proposers, 3, `${name}.min_proposers は 3 でなければならない`);
+    assert.equal(uc.min_proposers, 3,
+      `${name}.min_proposers は 3。2案だと各自が1案しか攻撃できず、攻撃の重なりが消える`);
 
-    // 提案者と評価者に Claude 以外が2者以上いること（別モデルによる採点の担保）
-    const externalEval = (uc.evaluators ?? []).filter((e) => e !== 'claude');
-    assert.ok(externalEval.length >= 2, `${name} の外部評価者が2者未満。合議として成立しない`);
+    // 2. 自分以外を敵対的レビュー / 3. 改稿
+    //    提案者と同じ顔ぶれでなければ「自分以外を攻撃する」「自分の案を直す」が成立しない
+    assert.deepEqual(uc.challengers, uc.proposers,
+      `${name} の challengers は proposers と同じ顔ぶれである必要がある`);
+    assert.deepEqual(uc.revisers, uc.proposers,
+      `${name} の revisers は proposers と同じ顔ぶれである必要がある`);
 
-    // 統合役は3案のうち1つを自分で書いている。自分の答えを自分で検品させてはならない。
-    assert.equal(uc.synthesizer, 'claude', `${name}.synthesizer は claude（唯一ファイルを扱える参加者）`);
-    const critics = uc.critics ?? [];
-    assert.ok(critics.length >= 2, `${name} の統合答案に対する外部批評者が2者未満`);
-    assert.ok(!critics.includes(uc.synthesizer),
-      `${name} の critics に統合役が含まれている。自分の答えを自分で検品しても意味がない`);
-    for (const c of critics) assert.doesNotThrow(() => resolveTier(c, config), `critic ${c} が解決できない`);
+    // 4. 統合は「Claude の別エージェント」。本体が兼ねると自案を土台にする動機が残る
+    assert.equal(uc.synthesizer, 'subagent:panel-synthesizer',
+      `${name}.synthesizer はサブエージェントでなければならない。本体が統合すると自案に偏る`);
+    assert.ok(!uc.proposers.includes(uc.synthesizer),
+      `${name} の統合役が提案者に含まれている`);
 
-    // 成果物は答えそのもの。実装への引き継ぎは無いので承認待ちで止めない。
+    // 採点は廃止。敵対的レビューが評価の役割を担う
+    assert.equal(uc.evaluators, undefined, `${name} に evaluators が残っている。採点は廃止した`);
+    assert.equal(uc.critics, undefined, `${name} に critics が残っている。批評は challenge に統合した`);
+
+    // 外部プロバイダの階層がすべて解決できること
+    for (const spec of [...uc.proposers, ...uc.challengers, ...uc.revisers]) {
+      if (spec === 'claude') continue;
+      assert.doesNotThrow(() => resolveTier(spec, config), `${spec} が解決できない`);
+    }
+
     assert.equal(uc.require_human_decision, false,
-      `${name} は答えを出して完了する用途。承認待ちで止める設計ではない`);
+      `${name} は結論を出して完了する用途。承認待ちで止める設計ではない`);
     assert.equal(uc.deliverable, 'answer.md');
   }
+});
+
+test('合議のサブエージェントが定義され、権限が分離されている', () => {
+  const synth = read('.claude/agents/panel-synthesizer.md');
+  assert.match(synth, /^name:\s*panel-synthesizer/m);
+
+  // 統合役に Web を与えると、入力に無いことを書き足してしまう
+  const tools = synth.match(/^tools:\s*(.+)$/m)?.[1] ?? '';
+  assert.doesNotMatch(tools, /WebSearch|WebFetch/,
+    'panel-synthesizer に Web ツールを与えてはならない。まとめ役は追加調査をしない');
+  assert.match(tools, /Write/, 'answer.md と provenance.json を書くので Write は要る');
+
+  // 著者を知らないまま読むことがこの工程の価値
+  assert.match(synth, /どれが本体の案かを知りません/);
+  assert.match(synth, /authors\.json` は渡されません|authors\.json.*渡されません/);
+});
+
+test('敵対的レビューと改稿の分離が手順書に書かれている', () => {
+  // ここを間違えると議論が成立しない。文章で縛るしかない箇所なので明示を確認する
+  assert.match(SKILL, /自分が書いた案を除いた2案.*だけを渡す/s,
+    '攻撃者に自分の案を渡さないこと');
+  assert.match(SKILL, /自分の案」と「自分の案への指摘」だけを渡す/,
+    '改稿者に他案を渡さないこと');
+  assert.match(SKILL, /`\.authors\.json` のパスは渡さない/,
+    '統合役に対応表を渡さないこと');
+  assert.match(SKILL, /サブエージェントに差し戻して書き直させる/,
+    '偏りの指摘を本体が自分で直さないこと');
 });
 
 test('pipeline 用途のレビュアーは Claude ではない', () => {
