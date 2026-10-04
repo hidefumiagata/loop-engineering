@@ -1,0 +1,2 @@
+{"issue":6,"slug":"0006-hackernews-summary","usecase":"research","mode":"pipeline","phase":"done","iteration":1,"max_iterations":5,"branch":"claude/loop-6-hackernews-summary","pr":8,
+"history":[{"n":1,"kind":"plan","by":"claude","at":"2026-10-04","cost_usd":0.0008},{"n":2,"kind":"work","by":"claude","at":"2026-10-04"},{"n":3,"kind":"review","by":"gemini:review","at":"2026-10-04","verdict":"PASS","cost_usd":0.0017}]}
