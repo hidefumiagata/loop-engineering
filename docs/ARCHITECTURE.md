@@ -95,6 +95,20 @@ panel:     brief → propose → evaluate → synthesize → critique ─┬─ 
              └── 重み3が全案未達 / BLOCKED のとき round++ して propose へ（max_panel_rounds まで）
 ```
 
+### Issue に成果物を書かない
+
+| 置き場 | 何を置くか |
+| --- | --- |
+| Issue 本文 | 人間が書いた目的・制約・受入のヒント |
+| Issue の状態コメント（1件） | 機械状態。フェーズ・反復数・ブランチ・PR番号 |
+| Issue の追加コメント | **原則なし。** 進められないとき（blocked / needs-human）の対処だけ |
+| PR | 成果物。レビューと参照はここ |
+| `projects/<slug>/` | 成果物の実体と過程の記録 |
+
+run ごとに結果コメントを積むと Issue が読めなくなり、
+成果物の正がどこにあるのかが曖昧になる。読む場所を PR に一本化している。
+やったこと・コスト・使った他社LLM は `journal/` と `*.meta.json` に残り、PR から辿れる。
+
 ラベルは状態の人間向けミラーであり、`gh issue list` のフィルタでもある。
 `loop:stop` は緊急停止スイッチで、`issue-state.mjs list` が即座に対象から外す。
 

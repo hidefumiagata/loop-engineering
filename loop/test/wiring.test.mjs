@@ -187,6 +187,35 @@ test('research 用途がサブエージェントを使う手順になってい�
   assert.match(SKILL, /サブエージェントが起動できない場合、自分で代行してはならない/);
 });
 
+test('成果物を Issue に書かせない', () => {
+  // Issue は「目的」と「状態」の置き場。成果物の置き場は PR とリポジトリ。
+  // run ごとに結果コメントを積むと Issue が読めなくなり、
+  // 成果物の正がどこにあるかが曖昧になる。
+  const targets = [
+    ['.claude/skills/loop-engine/SKILL.md', SKILL],
+    ['loop/prompts/usecases/deliberation.md', read('loop/prompts/usecases/deliberation.md')],
+    ['loop/prompts/usecases/research.md', read('loop/prompts/usecases/research.md')],
+  ];
+  // 「貼らない」「投稿しない」と否定している行は対象外
+  const forbidden = [
+    [/全文を\s*Issue\s*に投稿/, '成果物の全文を Issue に貼らせている'],
+    [/Issue\s*に[^。\n]*全文を投稿/, '成果物の全文を Issue に貼らせている'],
+    [/読者は\s*Issue\s*しか見ない/, 'Issue を読み先として扱っている。読み先は PR'],
+  ];
+  for (const [path, text] of targets) {
+    const lines = text.split('\n').filter((l) => !/貼らない|投稿しない|書かない|書いてはならない/.test(l));
+    for (const [re, why] of forbidden) {
+      const hit = lines.find((l) => re.test(l));
+      assert.ok(!hit, `${path}: ${why}\n  → ${hit}`);
+    }
+  }
+
+  // 例外（進められないときだけコメントしてよい）が明記されていること
+  assert.match(SKILL, /コメントしてよいのは、人間が動かないと進めないときだけ/);
+  // 状態コメントの更新は必須のまま
+  assert.match(SKILL, /run の終わりに必ず状態コメントを更新する/);
+});
+
 test('どちらのモードも最後は PR を作って人間に委ねる', () => {
   // panel は実装への引き継ぎが無いが、成果物が作業ブランチに取り残されると参照できなくなる。
   // main に入れるかどうかは人間が決める、という形を両モードで揃える。

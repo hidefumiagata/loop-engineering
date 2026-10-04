@@ -1,6 +1,6 @@
 ---
 name: loop-engine
-description: GitHub Issue 駆動の自律作業ループを1 run 分だけ進める。Claude Cloud の routine から定期実行される。pipeline モード（技術調査・プログラム構築・アイデア深堀）と panel モード（3LLMの合議）の両方を扱う。Issue のポーリング、受入基準の策定、作業、他社LLMによるレビュー、合議の集計、Issue への記録、ブランチと PR の更新を行う。
+description: GitHub Issue 駆動の自律作業ループを1 run 分だけ進める。Claude Cloud の routine から定期実行される。pipeline モード（技術調査・プログラム構築・アイデア深堀）と panel モード（3LLMの合議）の両方を扱う。Issue のポーリング、受入基準の策定、作業、他社LLMによるレビュー、合議の統合、状態コメントの更新、ブランチと PR の作成を行う。成果物は PR で読ませ、Issue には結果を書かない。
 ---
 
 # loop-engine
@@ -18,8 +18,21 @@ routine の保存プロンプトは「このファイルを読んで従え」と
 3. **他社LLMの呼び出しは必ず `node loop/bin/ask-llm.mjs` 経由。** 自分で `curl` を書いてはならない。
    APIキーはサンドボックス内に存在しない（Anthropic のプロキシが付与する）。キーを探さない、ログに出さない。
 4. **`scores.json` を書き換えない。** あれは `aggregate.mjs` の出力である。数値を引用するときは必ずそこから取る。
-5. **run の終わりに必ず Issue へ記録を残す。** 何もできなかった場合も、できなかったことを書く。
-   黙って終わる run は、次の run から見て「何が起きたか分からない」状態を作る。
+5. **Issue に成果物の内容を書かない。** Issue は「目的」と「状態」の置き場であって、成果物の置き場ではない。
+   調査結果・レポート本文・合議の答え・案の要旨・スコア表・比較表などを
+   Issue コメントに貼ってはならない。**成果物はリポジトリにあり、読む場所は PR である。**
+
+   | 置き場 | 何を置くか |
+   | --- | --- |
+   | Issue 本文 | 人間が書いた目的・制約・受入のヒント |
+   | Issue の状態コメント（1件） | 機械状態。フェーズ・反復数・ブランチ・PR番号・最終更新 |
+   | Issue の追加コメント | **原則なし。** 例外は下記の「進められないとき」だけ |
+   | PR | 成果物。レビューと参照はここで行う |
+   | `projects/<slug>/` | 成果物の実体と過程の記録 |
+
+   **run の終わりに必ず状態コメントを更新する。** 黙って終わる run は、
+   次の run から見て「何が起きたか分からない」状態を作る。
+   ただし更新するのは状態であって、結果の本文ではない。
 6. **`LOOP_DRY_RUN=1` のときは push・コメント投稿・ラベル変更・他社LLM呼び出しを一切行わない。**
    代わりに「何をするつもりか」を順に標準出力に書いて終わる。
 7. **GitHub の操作は REST だけを使う。** このクラウドセッションからは **GitHub GraphQL が 403 で拒否される**
@@ -82,7 +95,8 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
    ```bash
    node loop/bin/issue-state.mjs labels <issue> add "use:<キー>"
    ```
-3. どちらでも決まらなければ `research` を既定とし、そう判断したことを Issue にコメントする。
+3. どちらでも決まらなければ `research` を既定とし、そう判断した旨だけを1〜2行で Issue にコメントする
+   （4-1 の例外に当たる。結果は書かない）。
 
 `### 最大反復回数` 節があれば先頭の数字を `max_iterations` に使う。無ければ `config.defaults.max_iterations`。
 
@@ -268,8 +282,8 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 2. 同じ基準を `projects/<slug>/criteria.json` に `[{"id","text","weight"}]` で書き出す。
    `brief.md` の表と**1件もずれていないこと**を自分で確認する（`aggregate.mjs` は json のみ読む）。
 3. `gemini:review` に `critique` スキーマで基準を批評させ、取り込む。
-4. commit & push。Issue に `brief.md` の「決めたいこと」と基準表を投稿する
-   （人間がこの段階で軌道修正できるようにするため）。
+4. commit & push。**Issue には投稿しない。** `brief.md` はブランチ上にあり、PR で読める。
+   人間が軌道修正したいときは `brief.md` を直接見る。
 5. 状態を `phase: propose`、`panel_round: 1` にする。
 
 `granularity: iteration` でも **brief の後は一度 run を終える。**
@@ -401,8 +415,7 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 | 429/5xx で取得できない | **停止しない。** 取得できなかった事実を「この答えの限界」に明記して完了にする。提案と違い、批評の欠落は答えを無効にしない |
 
 4. 終了処理:
-   - **Issue に `answer.md` の全文を投稿する。** 読者は Issue しか見ないつもりで書くこと。
-     作業ブランチ上のファイルを開かせてはならない
+   - **Issue に `answer.md` を貼らない。** 答えは PR で読む
    - **PR を作る**（pipeline の work フェーズと同じ REST 呼び出し）。
      答えは読んで終わりだが、**成果物が作業ブランチに取り残されると参照できなくなる**。
      main に入れるかどうかは人間が決める:
@@ -427,39 +440,32 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 
 ## Step 4. run の記録（毎 run 必須）
 
-### 4-1. Issue に人間可読のコメントを投稿する
+### 4-1. Issue にコメントしない（原則）
 
-`gh issue comment` は GraphQL なので使えない。本文をファイルに書いてから:
+**成果物の内容を Issue に書いてはならない。** 進捗も結果も状態コメント（4-2）が持つ。
+run ごとに報告コメントを積むと、Issue が読めなくなり、成果物の正がどこにあるか曖昧になる。
+
+やったこと・使った他社LLM・コストは `journal/NNN-*.md` と `*.meta.json` に残す。
+そこが一次記録であり、PR で読める。
+
+**コメントしてよいのは、人間が動かないと進めないときだけ。** 次の3つに限る。
+
+| 場面 | 書くこと |
+| --- | --- |
+| `loop:blocked` にするとき | 何が起きて、何を確認・修正すればよいか。`[診断]` 行があればそのまま転記する |
+| `loop:needs-human` を付けるとき | 人間に何を判断・操作してほしいか |
+| 用途を本文から推測で決めたとき | そう判断した旨（1〜2行） |
+
+いずれも**短く、対処だけ**を書く。調査結果やレポート本文を添えない。
 
 ```bash
-node loop/bin/issue-state.mjs comment <issue> /tmp/run-comment.md
+# 上の3場面に当たるときだけ
+node loop/bin/issue-state.mjs comment <issue> /tmp/blocked.md
 ```
 
-本文の形:
+成果物を読ませたいときは **PR を案内する**。本文を Issue に貼らない。
 
-```markdown
-### <フェーズ名> を実行しました — <YYYY-MM-DD HH:MM JST>
-
-**やったこと**
-（3〜6行。何を作ったか・何が変わったか）
-
-**結果**
-（pipeline なら verdict と未達項目。panel ならスコア表と推奨案）
-
-**使った他社LLM**
-| 役割 | プロバイダ:階層 | モデル | コスト |
-| --- | --- | --- | --- |
-| reviewer | gemini:review | gemini-3.1-flash-lite | USD 0.0053 |
-
-**次にやること**
-（次の run が何をするか。人間の操作が必要ならそれを明記）
-
-<!-- 成果物: projects/<slug>/ / ブランチ: <branch> / PR: #<pr> -->
-```
-
-コストの行は `*.meta.json` の実測値から埋める。推定値を書かない。
-
-### 4-2. 状態コメントを更新する
+### 4-2. 状態コメントを更新する（毎 run 必須）
 
 ```bash
 cat > /tmp/state.json <<'EOF'

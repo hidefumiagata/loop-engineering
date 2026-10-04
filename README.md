@@ -60,7 +60,8 @@ Claude / Gemini / OpenAI が**それぞれ独立に案を出し、互いを匿�
 1. [新しい Issue を作る](../../issues/new/choose)（「ループタスク」テンプレート）
 2. 用途を選び、達成したいことを書く
 3. 次の定期実行（JST 09:00 / 15:00 / 21:00）で着手される。急ぐときは routine の **Run now**
-4. 進行は Issue 上の「ループ状態」コメントと `loop:*` ラベルで追える
+4. 進行は Issue 上の「ループ状態」コメントと `loop:*` ラベルで追える。
+   **成果物は Issue ではなく PR で読む**（Issue は目的と状態だけを持つ）
 5. 止めたくなったら **`loop:stop` ラベル**を付ける
 
 人間の操作が必要になるのは次の場合だけ。いずれも `loop:needs-human` ラベルが付く。
@@ -111,7 +112,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、70件）
+npm test                      # ユニットテスト（キー不要、71件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 
