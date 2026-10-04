@@ -420,8 +420,9 @@ test('サブエージェントの起動手順に出力先パスの指示があ�
 });
 
 test('サブエージェントが失敗した run は記録を残して終わる', () => {
-  // 実測: Issue #10 は phase: synthesize のまま、ラベルもコメントも残さず滞留した。
-  // 失敗を記録せずに終えると、毎時の run が黙って積み上がって誰も気づけない。
+  // レビュアーの失敗には5分岐の対応表があるのに、統合役の失敗には手順が無かった。
+  // 失敗を記録せずに終えると、毎時の run が黙って積み上がっても誰も気づけない。
+  // これは実測ではなく、非対称を埋めるための予防的な規定である。
   const from = SKILL.indexOf('### phase: synthesize');
   assert.ok(from > 0, 'synthesize のフェーズ節が無い');
   const section = SKILL.slice(from, SKILL.indexOf('### phase:', from + 10) + 1 || undefined);
