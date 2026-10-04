@@ -193,7 +193,12 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    渡すのは調査テーマ・受入基準・「公式に記述が無かった論点」・出力先パス。
    **段階1の結果そのものは渡さない**（公式の記述に引きずられ、独立した調査にならない）
 3. `research-reconcile` サブエージェントを起動し、2つの結果を突き合わせて
-   `report.md` を書かせる。このエージェントには Web を引く手段を与えていない。
+   `report.md` を書かせる。
+   渡すのは `projects/<slug>/findings/official.md`・`projects/<slug>/findings/community.md`・
+   `projects/<slug>/plan.md` のパスと、**出力先パス `projects/<slug>/report.md`**。
+   このエージェントは「保存先のパスは呼び出し元から渡される」前提で書かれているので、
+   **出力先を渡し忘れると書き込みに失敗して段階3が落ちる**（実測: Issue #13）。
+   このエージェントには Web を引く手段を与えていない。
    突き合わせ役が追加調査で穴を埋めると、照合の意味が消えるため
 
 **サブエージェントが起動できない場合、自分で代行してはならない。**
@@ -319,12 +324,17 @@ brief → propose → challenge → revise → synthesize → done
    > **提案の生成は数分かかる。** `openai:propose` は `background: true` で非同期化してあり、
    > `ask-llm.mjs` が内部でポーリングする。**Bash の `run_in_background: true` で実行すること。**
 
+   > **`--max-output-tokens` を 16000 より下げない。** `gpt-5.5` は `reasoning_effort: high` で
+   > 推論トークンも出力に数えるため、8000 では本文が出来上がる前に打ち切られる。
+   > 打ち切られると再実行することになり、**1回目の課金は `*.meta.json` にも残らないまま消える**
+   > （実測: Issue #10 で実際の出力は 10,705 / 15,612 トークン。初回 8000 で打ち切られ再実行した）。
+
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 8000 \
+     --input projects/<slug>/brief.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/_gemini.md
    node loop/bin/ask-llm.mjs --spec openai:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 8000 \
+     --input projects/<slug>/brief.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/_openai.md
    ```
 4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**（`min_proposers: 3`）。
@@ -379,10 +389,11 @@ brief → propose → challenge → revise → synthesize → done
 2. 呼ぶ。スキーマは**使わない**（改稿後の案を Markdown で返させる）:
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/reviser.md \
-     --input /tmp/revise-packet-gemini.md --max-output-tokens 8000 \
+     --input /tmp/revise-packet-gemini.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/<geminiのラベル>.v2.md
    ```
    OpenAI も同様（`run_in_background: true` で実行する）。
+   **propose と同じ理由で `--max-output-tokens` を 16000 より下げない。**
 3. Claude 自身も `reviser.md` に従って自案を改稿し `<claudeのラベル>.v2.md` に書く。
 4. 改稿が取得できなかった案は、**初稿をそのまま `.v2.md` にコピーする**。
    欠けたままにすると統合役の入力が揃わない。コピーした事実を `journal` に書く。
@@ -403,6 +414,16 @@ brief → propose → challenge → revise → synthesize → done
 
    **`.authors.json` のパスは渡さない。内容も伝えない。**
    「どれがあなたの案か」を示唆する発言もしない。
+
+   **`panel-synthesizer` が起動できない、または `answer.md` / `provenance.json` を
+   書き込めないとき:** **あなたが代行してはならない。**
+   `loop:blocked` と `loop:needs-human` を付け、Issue に「何が起きたか」と
+   「次に何をすればよいか」を書いて run を終える。
+   状態は `phase: synthesize` のまま変えない（解消後に同じフェーズから再開する）。
+
+   **黙って同じフェーズをやり直して終わってはならない。**
+   記録を残さずに終えると、失敗した run が毎時積み上がっていることに誰も気づけない
+   （実測: Issue #10 が `phase: synthesize` のまま、ラベルもコメントも残さず滞留した）。
 
 2. **自案への偏りを機械的に確認する:**
    ```bash
