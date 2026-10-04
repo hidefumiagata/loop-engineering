@@ -1,0 +1,14 @@
+{
+  "provider": "gemini",
+  "tier": "propose",
+  "model": "gemini-3.8-flash",
+  "schema": null,
+  "usage": {
+    "input_tokens": 2302,
+    "output_tokens": 4861
+  },
+  "cost_usd": 0.019955,
+  "truncated": false,
+  "dry_run": false,
+  "at": "2026-10-04T09:02:39.548Z"
+}
