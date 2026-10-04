@@ -14,7 +14,7 @@
       "issues_per_run": 2
     },
     "hourly": {
-      "$comment": "毎時実行。run は潤沢なので律速はトークン枠。1 run を短く保ち、5時間枠を食い潰さない",
+      "$comment": "毎時実行。run は潤沢なので律速はトークン枠。1 run を短く保つ。Max なら issues_per_run を 2 に上げてもよい",
       "granularity": "phase",
       "issues_per_run": 1
     }

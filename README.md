@@ -99,7 +99,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 
 | | 内容 | 費用 |
 | --- | --- | --- |
-| Claude | Pro サブスクリプション。routines に日次上限あり（残り回数は claude.ai/code/routines） | $20/月（既存） |
+| Claude | サブスクリプション（現在 **Max**）。routines に日次上限あり（残り回数は claude.ai/code/routines） | 既存 |
 | Gemini | 通常レビューは `gemini-3.1-flash-lite` の**無料枠** | $0 |
 | Gemini | 合議のみ `gemini-3.8-flash` 有料 | 1ラウンド $0.03（実測） |
 | OpenAI | 合議のみ（`propose`=gpt-5.5 / `evaluate`=gpt-5-mini）。通常レビューでは **OFF** | 1ラウンド $0.32（実測） |

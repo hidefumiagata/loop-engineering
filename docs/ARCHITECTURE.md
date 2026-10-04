@@ -19,7 +19,7 @@ Claude Cloud Routine "loop-engine" ───────────────
   model   : Sonnet 5
   prompt  : 「.claude/skills/loop-engine/SKILL.md を読んで厳密に従え」
 
-  1 run = 1 Issue × 1 イテレーション（Pro プリセット）
+  1 run = 1 Issue × 1 フェーズ（hourly プリセット。毎時実行のため）
        ↓
   他社LLMは node loop/bin/ask-llm.mjs 経由で REST 単発呼び出し
        ↓
@@ -62,7 +62,7 @@ run が少ない場合（1日数回）、1 run = 1フェーズにすると、3�
 plan(1) + work(3) + review(3) = 7 run
 ```
 
-となり、1.5日かかって並行2件で完全に詰まる。Pro では **run 数が律速でトークン枠は余る**ため、
+となり、1.5日かかって並行2件で完全に詰まる。run が少ない構成では **run 数が律速でトークン枠は余る**ため、
 1 run の中で work → review → 判定 まで通す設計にした。これで3反復の Issue が約4 run ≒ 1日強で完了する。
 
 `loop/config.json` の `preset` を `"max"` にすると `granularity: "phase"` に切り替わり、
@@ -267,7 +267,8 @@ Claude はオーケストレータ兼参加者なので、他案を見てから�
 **コストを抑えたいなら締めるべきはモデルの単価ではなく出力長である。**
 
 月4件 × 2ラウンド = 8ラウンドで **約 $2.9/月**。
-つまり **LLM の API 代は誤差であり、実質的な費用判断は Claude Pro($20) か Max 5x($100) かの一点**である。
+つまり **LLM の API 代は誤差であり、実質的な費用判断は Claude のプラン（Pro $20 / Max 5x $100 / Max 20x $200）だけ**である。
+現在は **Max** で運用している。
 
 ### gpt-5-mini を提案生成に使わない理由
 
@@ -302,8 +303,8 @@ auth.json を環境変数から書き戻す形にしてもトークンのロー�
 | 手段 | 効果 |
 | --- | --- |
 | cron の頻度と `preset` を揃える | run 律速なら粒度を粗く、トークン枠律速なら細かくする |
-| `granularity: iteration` / `issues_per_run: 1` | run 数が律速の Pro で1 run あたりの前進量を最大化 |
-| routine のモデルを Sonnet 5 に固定 | Pro の5時間枠・週次枠を保たせる |
+| `granularity` を cron の頻度に合わせる | run 律速なら粗く（`iteration`）、トークン枠律速なら細かく（`phase`） |
+| routine のモデルを選ぶ | Sonnet は枠を保たせる。Max で枠に余裕があるなら Opus にして作業品質を上げてよい |
 | モデル階層の分離 | 高頻度のレビューを無料に閉じ込める |
 | `tiers.*.enabled` ガード | `false` の階層を呼ぶと `ask-llm.mjs` が即エラー終了する |
 | 呼び出しごとの実コスト出力 | `*.meta.json` と Issue コメントに実測値が残り、後から追える |

@@ -2,7 +2,7 @@
 
 所要 20〜30分。手順 4 以降は claude.ai 上のブラウザ操作が必要。
 
-前提: Claude **Pro**（または Max）プラン、`gh` CLI がログイン済み、Node 20 以上。
+前提: Claude **Pro / Max** のいずれか（API credentials は Pro と Max のみ）、`gh` CLI がログイン済み、Node 20 以上。
 
 ---
 
@@ -116,7 +116,7 @@ API credentials の欄が出ない）。環境にカーソルを合わせて右�
 | --- | --- |
 | Name | `loop-engine` |
 | Prompt | 下記 |
-| Model | **Sonnet 5**（Pro の使用枠を保たせる） |
+| Model | **Sonnet 5**（使用枠を保たせる）。Max で枠に余裕があるなら Opus にすると調査・統合の品質が上がる |
 | Repositories | `hidefumiagata/loop-engineering` |
 | Environment | `loop-env` |
 | Connectors | **不要なものをすべて外す**（included だと書き込み系ツールも無断で使える） |
