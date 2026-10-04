@@ -2,7 +2,7 @@
 title: Hacker News Top10 の日本語要約
 issue: 6
 updated: 2026-10-04
-status: draft
+status: reviewed
 ---
 
 ## 要約
@@ -113,4 +113,4 @@ Aleph Alphaが、ドイツ統一の日（10月3日）に、英独対応の主権
 
 ## 出典
 
- を参照。
+`sources.md` を参照。
