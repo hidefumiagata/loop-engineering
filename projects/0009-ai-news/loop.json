@@ -1,1 +1,30 @@
-{"issue":9,"mode":"pipeline","usecase":"research","slug":"0009-ai-news","branch":"claude/loop-9-ai-news","phase":"work","iteration":1,"max_iterations":5,"pr":null,"artifacts":["report.md","sources.md"],"history":[{"n":1,"kind":"plan","by":"claude","at":"2026-10-04"}]}
+{
+  "issue": 9,
+  "mode": "pipeline",
+  "usecase": "research",
+  "slug": "0009-ai-news",
+  "branch": "claude/loop-9-ai-news",
+  "phase": "review",
+  "iteration": 1,
+  "max_iterations": 5,
+  "pr": 12,
+  "artifacts": [
+    "report.md",
+    "sources.md"
+  ],
+  "history": [
+    {
+      "n": 1,
+      "kind": "plan",
+      "by": "claude",
+      "at": "2026-10-04"
+    },
+    {
+      "n": 2,
+      "kind": "work",
+      "by": "claude",
+      "at": "2026-10-04"
+    }
+  ],
+  "updated_at": "2026-10-04T08:06:04.758Z"
+}
