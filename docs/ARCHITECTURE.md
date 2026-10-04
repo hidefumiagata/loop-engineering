@@ -43,7 +43,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 | 制約 | 出典 | 設計上の対応 |
 | --- | --- | --- |
 | routines の GitHub トリガーは **Pull Request と Release のみ**。Issue イベントは非対応 | [routines](https://code.claude.com/docs/en/routines) | Issue 駆動を **cron ポーリング**で実装。即時性が必要なときは API トリガーで手動発火 |
-| cron は**最短1時間**。日次実行上限は **Pro 5 run/日 / Max 15 run/日**（アカウント単位・全routine合算・UTC 0時リセット・未消化は繰り越されない） | 同上 / [解説](https://openhelm.ai/blog/claude-code-routines-daily-limit) | **最大の制約。** 1 run の粒度を「1フェーズ」ではなく「1イテレーション」にした（後述） |
+| cron は**最短1時間**。日次実行上限は存在するが**公称値を確認できていない** | 同上。第三者解説の「Pro 5 run/日」は実測と矛盾した（2026-10-03 に8回動いた） | 残り回数は claude.ai/code/routines で確認する。**cron の頻度に応じて `preset` で粒度を変える**（後述） |
 | Cloud環境の **API credentials**（Pro/Max限定）は指定ホスト宛にプロキシがキーを付与し、キーがサンドボックス内に露出しない | [cloud-environments](https://code.claude.com/docs/en/cloud-environments) | これが3LLM構成の要。Gemini / OpenAI を鍵を晒さず呼べる |
 | サンドボックスは Ubuntu 24.04 / Node 20-22 / Python3 / **`gh` プリインストール（`GH_TOKEN` 自動設定）** | 同上 | `loop/bin/*.mjs` を依存ゼロで書き、setup script を不要にした |
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
@@ -56,7 +56,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 
 ## なぜ「1 run = 1 イテレーション」なのか
 
-Pro は routines が 5 run/日。1 run = 1フェーズにすると、3反復必要な Issue 1件で
+run が少ない場合（1日数回）、1 run = 1フェーズにすると、3反復必要な Issue 1件で
 
 ```
 plan(1) + work(3) + review(3) = 7 run
@@ -67,7 +67,9 @@ plan(1) + work(3) + review(3) = 7 run
 
 `loop/config.json` の `preset` を `"max"` にすると `granularity: "phase"` に切り替わり、
 1フェーズ1run の細かい粒度（Issue に残る記録が細かく、失敗時の巻き戻しが楽）に戻る。
-Max 移行の判断は、claude.ai/code/routines の run 履歴が 5 run/日 に張り付くかを実測してから行う。
+毎時実行（`preset: "hourly"`）では run が潤沢になり、律速が run 数からトークン枠へ移る。
+そのときは逆に **1 run を短く保つ**ことが重要になるので `granularity: "phase"` を使う。
+**cron の頻度を変えたら preset も見直すこと。** どちらが律速かで最適な粒度が反転する。
 
 ただし panel の `brief` フェーズだけは `granularity: iteration` でも**必ずそこで run を終える**。
 ブリーフは人間が目を通す価値がある分岐点だからである。
@@ -285,7 +287,7 @@ auth.json を環境変数から書き戻す形にしてもトークンのロー�
 
 | 手段 | 効果 |
 | --- | --- |
-| cron 3回/日 + API発火用に2 run 予備 | Pro の 5 run/日 上限に収める |
+| cron の頻度と `preset` を揃える | run 律速なら粒度を粗く、トークン枠律速なら細かくする |
 | `granularity: iteration` / `issues_per_run: 1` | run 数が律速の Pro で1 run あたりの前進量を最大化 |
 | routine のモデルを Sonnet 5 に固定 | Pro の5時間枠・週次枠を保たせる |
 | モデル階層の分離 | 高頻度のレビューを無料に閉じ込める |

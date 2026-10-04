@@ -1,17 +1,22 @@
 {
-  "$comment": "loop-engineering の中央設定。SKILL.md と loop/bin/*.mjs がこれを読む。プラン変更時は preset を変えるだけでよい。",
+  "$comment": "loop-engineering の中央設定。SKILL.md と loop/bin/*.mjs がこれを読む。cron の頻度を変えたら preset も見直す。",
   "version": 1,
-  "preset": "pro",
+  "preset": "hourly",
   "presets": {
     "pro": {
-      "$comment": "Pro は routines が 5 run/日。run 数が律速なので 1 run で複数フェーズを通す。",
+      "$comment": "run が少ない場合。1 run で複数フェーズを通し、前進量を最大化する",
       "granularity": "iteration",
       "issues_per_run": 1
     },
     "max": {
-      "$comment": "Max は 15 run/日。1 run 1 フェーズにして記録を細かくし、巻き戻しを容易にする。",
+      "$comment": "run に余裕がある場合。1 run 1 フェーズにして記録を細かくし、巻き戻しを容易にする",
       "granularity": "phase",
       "issues_per_run": 2
+    },
+    "hourly": {
+      "$comment": "毎時実行。run は潤沢なので律速はトークン枠。1 run を短く保ち、5時間枠を食い潰さない",
+      "granularity": "phase",
+      "issues_per_run": 1
     }
   },
   "defaults": {

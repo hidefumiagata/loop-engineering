@@ -11,7 +11,8 @@ routine の保存プロンプトは「このファイルを読んで従え」と
 ## 絶対規則
 
 1. **1 run で処理する Issue は `loop/config.json` の `issues_per_run` 件まで。** 既定 1 件。
-   Pro プランは routines が 5 run/日 しかない。張り切って全部やろうとせず、1件を確実に前進させる。
+   張り切って全部やろうとせず、1件を確実に前進させる。
+   1 run を短く保つことが、トークン枠（5時間枠・週次枠）を食い潰さないための主な手段である。
 2. **この手順書に書かれていない判断を足さない。** 迷ったら Issue にコメントして `loop:needs-human` を付け、
    人間に渡す。自分で決めてよいのは手順書が委ねている範囲だけ。
 3. **他社LLMの呼び出しは必ず `node loop/bin/ask-llm.mjs` 経由。** 自分で `curl` を書いてはならない。
@@ -54,8 +55,8 @@ node loop/bin/issue-state.mjs list                    # 対象 Issue を古い�
 
 | granularity | 1 run でやること |
 | --- | --- |
-| `iteration` (Pro 既定) | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→synthesize→critique |
-| `phase` (Max 向け) | フェーズを1つだけ実行して終える |
+| `iteration` | 1イテレーション分を通す。pipeline なら work→review→判定、panel なら propose→evaluate→synthesize→critique。**run が少ないとき向け** |
+| `phase` | フェーズを1つだけ実行して終える。**run が潤沢なとき向け**（毎時実行など）。1 run が短くなるのでトークン枠を食い潰しにくい |
 
 `list` が空なら、**何もせずに終了する**。Issue も作らない。リトライループも組まない。
 「対象 Issue なし」とだけ標準出力に書く。

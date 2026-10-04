@@ -143,7 +143,7 @@ API credentials の欄が出ない）。環境にカーソルを合わせて右�
 対話で `loop-engine` を選び、cron を `0 0,6,12 * * *`（UTC）に設定する。
 = JST 09:00 / 15:00 / 21:00 の3回。
 
-**なぜ3回か**: Pro の routines は **5 run/日**（アカウント単位・全routine合算・UTC 0時リセット）。
+**なぜ3回か**: routines には日次実行上限がある（アカウント単位・全routine合算・UTC 0時リセット）。
 cron で3回使い、残り2回を手動発火（Run now / API）の予備に残す配分である。
 
 ### API トリガーを足す（手動発火用）
@@ -294,7 +294,7 @@ Issue を1件作る（用途: 合議）。例:
 <https://claude.ai/code/routines> の run 履歴と
 <https://claude.ai/settings/usage> を数日見て、次を `docs/` に追記する。
 
-- 5 run/日 に張り付いているか（→ cron 回数の調整 or Max 移行の判断材料）
+- 日次上限に張り付いているか（→ cron 回数の調整 or Max 移行の判断材料）
 - **`Run now` と API 発火が日次上限に計上されるか**
   （公式ドキュメントは「一度きりのスケジュール実行は上限に含まれない」とするが、
   `Run now` と API 発火については記載が割れている。実測が唯一の確実な情報源）
@@ -331,4 +331,4 @@ Issue を1件作る（用途: 合議）。例:
 ```
 
 これで `granularity` が `phase` に、`issues_per_run` が 2 になる。
-cron も `/schedule update` で増やせる（15 run/日 まで）。
+cron も `/schedule update` で増やせる。
