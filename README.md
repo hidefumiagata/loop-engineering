@@ -20,6 +20,16 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 `plan`（受入基準の策定）→ `work`（作業）→ `review`（別モデルによる判定）を反復する。
 レビュアーは **Gemini**、作業は **Claude**。同じモデルが作って採点する構造を避けている。
 
+**技術調査だけは work がさらに3段に分かれる。**
+
+1. 本体が**公式ドキュメントだけ**を調べる
+2. サブエージェントが**公式以外のブログ・実装例だけ**を調べる
+3. 別のサブエージェントが両者を突き合わせてレポートを書く。
+   一致すれば公式、相違があれば公式を採ったうえで**非公式が何と言っていたかを備考に残す**、
+   非公式のみなら**公式から得られなかった旨を明記**する
+
+突き合わせ役には Web ツールを与えていない。追加調査で穴を埋められると照合の意味が消えるため。
+
 ### panel — 3つのLLMで合議する
 
 アーキテクチャ検討のように「正解が1つに決まらないが、決めなければ進めない」課題。
@@ -70,6 +80,7 @@ loop/
   config.json      プラン別プリセット・モデル階層・用途ごとのモード定義
   prompts/roles/      planner worker reviewer proposer evaluator synthesizer critic
   prompts/usecases/   research build ideation deliberation
+.claude/agents/       research-community / research-reconcile（技術調査のサブエージェント）
   bin/ask-llm.mjs     他社LLM の REST アダプタ（依存ゼロ）
   bin/aggregate.mjs   合議スコアの機械集計（純関数）
   bin/synthesis-check.mjs 統合答案の寄与比率を算出し自案への偏りを検出（純関数）
@@ -100,7 +111,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、67件）
+npm test                      # ユニットテスト（キー不要、70件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 

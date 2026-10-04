@@ -120,6 +120,7 @@ API credentials の欄が出ない）。環境にカーソルを合わせて右�
 | Repositories | `hidefumiagata/loop-engineering` |
 | Environment | `loop-env` |
 | Connectors | **不要なものをすべて外す**（included だと書き込み系ツールも無断で使える） |
+| 許可ツール | `Bash` `Read` `Write` `Edit` `Glob` `Grep` `WebFetch` `WebSearch` **`Agent`**。**`Agent` が無いと技術調査のサブエージェントを起動できず blocked になる** |
 | Trigger | Schedule（後で cron を調整する） |
 
 プロンプトはこれだけ。ロジックはリポジトリ側にある。

@@ -151,6 +151,42 @@ test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使ってい�
   assert.match(code, /execFileSync\('curl'/, 'curl 経由であることを明示的に確認する');
 });
 
+test('技術調査のサブエージェントが定義され、権限が分離されている', () => {
+  // 公式と非公式を1人が同時に読むと文脈の中で混ざり、「公式に書いてあった気がするが
+  // 実はブログだった」という取り違えが後から検証できなくなる。
+  // 分離そのものがこの用途の価値なので、定義と権限を固定する。
+  const read1 = (p) => read(p);
+
+  const community = read1('.claude/agents/research-community.md');
+  assert.match(community, /^name:\s*research-community/m);
+  assert.match(community, /^tools:.*WebSearch/m, '非公式調査には検索が要る');
+  assert.match(community, /公式ドキュメントに当たってはいけない/,
+    '公式を読ませると突き合わせる相手が居なくなる');
+
+  const reconcile = read1('.claude/agents/research-reconcile.md');
+  assert.match(reconcile, /^name:\s*research-reconcile/m);
+  // 突き合わせ役に Web を与えると、追加調査で穴を埋めてしまい照合の意味が消える
+  const tools = reconcile.match(/^tools:\s*(.+)$/m)?.[1] ?? '';
+  assert.doesNotMatch(tools, /WebSearch|WebFetch/,
+    'research-reconcile に Web ツールを与えてはならない。突き合わせ役は追加調査をしない');
+  assert.match(tools, /Write/, 'report.md を書くので Write は要る');
+
+  // 公式優先の3規則が書かれていること
+  assert.match(reconcile, /公式（非公式と相違）/, '相違時は公式を採りつつ備考に残す');
+  assert.match(reconcile, /非公式のみ/, '非公式のみの場合の区分');
+  assert.match(reconcile, /200文字程度/, '調査概要の字数指定');
+});
+
+test('research 用途がサブエージェントを使う手順になっている', () => {
+  const research = read('loop/prompts/usecases/research.md');
+  for (const name of ['research-community', 'research-reconcile']) {
+    assert.ok(research.includes(name), `research.md が ${name} を参照していない`);
+    assert.ok(SKILL.includes(name), `SKILL.md が ${name} を参照していない`);
+  }
+  // 代行の禁止。1人でやると分離の意味が消える
+  assert.match(SKILL, /サブエージェントが起動できない場合、自分で代行してはならない/);
+});
+
 test('どちらのモードも最後は PR を作って人間に委ねる', () => {
   // panel は実装への引き継ぎが無いが、成果物が作業ブランチに取り残されると参照できなくなる。
   // main に入れるかどうかは人間が決める、という形を両モードで揃える。
