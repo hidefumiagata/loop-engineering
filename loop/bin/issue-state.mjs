@@ -105,9 +105,29 @@ export function validateState(s) {
 
 // ---------------- コメント本文の組み立てと解析 ----------------
 
+/**
+ * 成果物ファイルへの GitHub リンクを組み立てる。
+ *
+ * Issue には成果物の**本文を書かない**が、リンクは置く。
+ * 作業ブランチ上のファイルは Issue からは辿れないため、リンクが無いと
+ * 「どこを見ればよいか分からない」状態になる。
+ */
+export function artifactLinks(state, repo) {
+  const files = state.artifacts ?? [];
+  if (!repo || !state.branch || !state.slug || files.length === 0) return null;
+  return files
+    .map((f) => `[${f}](https://github.com/${repo}/blob/${state.branch}/projects/${state.slug}/${f})`)
+    .join(' · ');
+}
+
 /** 人間が Issue を開いたときに一目で分かる見出しを付けてから JSON を埋める */
-export function renderStateComment(state) {
+export function renderStateComment(state, repo = null) {
   const pct = state.max_iterations ? `${state.iteration}/${state.max_iterations}` : String(state.iteration);
+  const links = artifactLinks(state, repo);
+  const dir = repo && state.branch
+    ? `[\`projects/${state.slug}/\`](https://github.com/${repo}/tree/${state.branch}/projects/${state.slug})`
+    : `\`projects/${state.slug}/\``;
+
   const head = [
     MARKER,
     '### ループ状態',
@@ -119,11 +139,13 @@ export function renderStateComment(state) {
     `| 反復 | ${pct}${state.panel_round ? ` / panelラウンド ${state.panel_round}` : ''} |`,
     `| ブランチ | \`${state.branch}\` |`,
     `| PR | ${state.pr ? `#${state.pr}` : '未作成'} |`,
-    `| 成果物 | \`projects/${state.slug}/\` |`,
+    `| 成果物 | ${links ?? '（まだありません）'} |`,
+    `| 一式 | ${dir} |`,
     `| 人間の判断待ち | ${state.awaiting_human ? '**はい**' : 'いいえ'} |`,
     `| 最終更新 | ${state.updated_at ?? '-'} |`,
     '',
     'このコメントは loop-engine が自動更新します。手で編集しないでください。',
+    'リンク先は作業ブランチ上のファイルです。PR をマージすると `main` 側に移ります。',
     '進行を止めたいときは Issue に `loop:stop` ラベルを付けてください。',
     '',
     '<details><summary>生の状態 (JSON)</summary>',
@@ -161,7 +183,7 @@ export function readState(issue, repo = repoSlug()) {
 export function writeState(issue, state, repo = repoSlug()) {
   validateState(state);
   state.updated_at = new Date().toISOString();
-  const body = renderStateComment(state);
+  const body = renderStateComment(state, repo);
   const existing = readState(issue, repo);
 
   if (DRY) {

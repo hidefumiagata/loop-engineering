@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStateComment, parseStateComment, validateState, MARKER } from '../bin/issue-state.mjs';
+import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER } from '../bin/issue-state.mjs';
 
 const pipelineState = {
   issue: 12,
@@ -93,4 +93,38 @@ test('反復が上限を大きく超えたら弾く', () => {
   // +1 は「上限到達を検出して blocked にする」ための猶予として許す
   assert.doesNotThrow(() => validateState({ ...pipelineState, iteration: 6, max_iterations: 5 }));
   assert.throws(() => validateState({ ...pipelineState, iteration: 7, max_iterations: 5 }), /max_iterations/);
+});
+
+test('成果物をリンクとして状態コメントに載せる', () => {
+  // Issue には成果物の本文を書かないが、リンクは置く。
+  // 作業ブランチ上のファイルは Issue から辿れないため、リンクが無いと
+  // 「どこを見ればよいか分からない」状態になる。
+  const s = { ...pipelineState, artifacts: ['report.md', 'sources.md'] };
+  const body = renderStateComment(s, 'hidefumiagata/loop-engineering');
+
+  assert.match(body, /\[report\.md\]\(https:\/\/github\.com\/hidefumiagata\/loop-engineering\/blob\/claude\/loop-12-mcp-security\/projects\/0012-mcp-security\/report\.md\)/);
+  assert.match(body, /\[sources\.md\]\(/);
+  assert.match(body, /tree\/claude\/loop-12-mcp-security\/projects\/0012-mcp-security/, '一式へのリンクも出す');
+  assert.match(body, /PR をマージすると `main` 側に移ります/, 'リンクが切れる条件を説明する');
+
+  // JSON は無損失で往復する（artifacts を足しても壊れない）
+  assert.deepEqual(parseStateComment(body), s);
+});
+
+test('repo が分からない、または成果物が無ければリンクを出さない', () => {
+  const noRepo = renderStateComment({ ...pipelineState, artifacts: ['report.md'] });
+  assert.doesNotMatch(noRepo, /https:\/\/github\.com/, 'repo 不明ならリンクを組み立てない');
+
+  const noArtifacts = renderStateComment(pipelineState, 'owner/repo');
+  assert.match(noArtifacts, /（まだありません）/, '成果物が無いことを明示する');
+});
+
+test('artifactLinks の組み立て規則', () => {
+  const s = { branch: 'claude/loop-9-x', slug: '0009-x', artifacts: ['a.md', 'b.json'] };
+  const links = artifactLinks(s, 'o/r');
+  assert.equal(links,
+    '[a.md](https://github.com/o/r/blob/claude/loop-9-x/projects/0009-x/a.md)'
+    + ' · [b.json](https://github.com/o/r/blob/claude/loop-9-x/projects/0009-x/b.json)');
+  assert.equal(artifactLinks({ ...s, artifacts: [] }, 'o/r'), null);
+  assert.equal(artifactLinks(s, null), null);
 });

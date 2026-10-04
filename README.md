@@ -112,7 +112,7 @@ docs/SETUP.md         クラウド環境・API credential・routine の設定手
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、71件）
+npm test                      # ユニットテスト（キー不要、76件）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 

@@ -216,6 +216,11 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
   ```
   **draft では作らない。** draft → ready の解除は GraphQL 専用でクラウドから叩けないため、
   開いたまま解除できない PR が残ってしまう。完了の signal は `loop:done` ラベルが持つので draft は不要。
+
+  **本文の末尾に `Closes #<issue>` を必ず入れる。** マージ時に Issue が自動でクローズされる。
+  これが無いと、完了した Issue が open のまま残り、`loop` ラベル付きなので
+  **次の run がまた拾ってしまう**（`loop:done` で除外されるが、ラベルを外すと再開する）。
+
   作成した PR 番号を状態の `pr` に入れる。
 - 状態を `phase: review` にする。
 
@@ -476,6 +481,19 @@ node loop/bin/issue-state.mjs write <issue> /tmp/state.json
 
 `history` に今回の 1 エントリを追加する（`{n, kind, by, at}` と、あれば `verdict` / `cost_usd`）。
 `history` が 20 件を超えたら古いものから落とす（コメントが肥大すると読めなくなる）。
+
+**`artifacts` に成果物のファイル名を入れる。** `projects/<slug>/` からの相対パスで、
+人間が読むべきものだけを 2〜5 件。状態コメントがこれを GitHub のリンクに展開する。
+
+| 用途 | 入れるもの |
+| --- | --- |
+| research | `["report.md", "sources.md"]` |
+| build | `["src/README.md"]` |
+| ideation | `["report.md"]` |
+| deliberation | `["answer.md", "scores.json", "synthesis-check.json"]` |
+
+中間ファイル（`findings/` や `journal/`）は入れない。一式は「一式」行のリンクから辿れる。
+**Issue に本文を貼らない代わりに、リンクで辿れるようにするのがこの欄の役目である。**
 
 ### 4-3. ラベルを状態に合わせる
 

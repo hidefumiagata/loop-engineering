@@ -234,6 +234,27 @@ test('どちらのモードも最後は PR を作って人間に委ねる', () =
   assert.match(skill, /マージはしない/, 'エージェントにマージさせない');
 });
 
+test('PR 本文が Issue を自動クローズする', () => {
+  // Closes が無いと、完了した Issue が open のまま残る。
+  // loop ラベルが付いたままなので、ラベル構成によっては次の run が拾い直してしまう。
+  const bodies = [...SKILL.matchAll(/"body":\s*"([^"]*(?:\\.[^"]*)*)"/g)].map((m) => m[1]);
+  const prBodies = bodies.filter((b) => b.includes('projects/<slug>/'));
+  assert.ok(prBodies.length >= 2,
+    `PR 本文テンプレートが ${prBodies.length} 件しか見つからない。pipeline と panel の両方に必要`);
+  for (const b of prBodies) {
+    assert.match(b, /Closes #<issue>/,
+      `PR 本文に Closes #<issue> が無い: ${b.slice(0, 70)}…`);
+  }
+  assert.match(SKILL, /マージ時に Issue が自動でクローズされる/, '理由を手順書に残す');
+});
+
+test('状態コメントが成果物へのリンクを持つ', () => {
+  // Issue に本文を貼らない代わりに、リンクで辿れるようにする。
+  assert.match(SKILL, /`artifacts` に成果物のファイル名を入れる/);
+  // 中間ファイルを並べると、どれを読めばよいか分からなくなる
+  assert.match(SKILL, /中間ファイル（`findings\/` や `journal\/`）は入れない/);
+});
+
 test('長文を生成する propose 階層は background で非同期化されている', () => {
   // 実測: エージェントプロキシは1リクエスト約30秒で諦め、
   // 502 "upstream request failed" を返す（gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
