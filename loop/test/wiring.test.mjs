@@ -398,3 +398,48 @@ test('上限の既定値が入っている', () => {
   assert.equal(config.defaults.branch_prefix, 'claude/loop-',
     'Claude Cloud は claude/ 接頭辞のブランチのみ常に push を許す');
 });
+
+test('サブエージェントの起動手順に出力先パスの指示がある', () => {
+  // 実測: Issue #13 は research-reconcile が report.md を書けずに blocked になった。
+  // 原因は手順書が出力先パスを渡していなかったこと。エージェント定義側は
+  // 「保存先のパスは呼び出し元から渡されます」と書かれているので、
+  // 渡し忘れても設定エラーにはならず、run が落ちる形で初めて分かる。
+  for (const agent of ['research-community', 'research-reconcile', 'panel-synthesizer']) {
+    const at = SKILL.indexOf(agent);
+    assert.ok(at > 0, `${agent} が SKILL.md に出てこない`);
+    assert.match(SKILL.slice(at, at + 900), /出力先/,
+      `${agent} の起動手順に出力先パスを渡す指示がない。渡さないと書き込みに失敗する`);
+  }
+
+  // エージェント定義が呼び出し元にパスを委ねているなら、手順書側がそれを渡していること
+  const reconcile = read('.claude/agents/research-reconcile.md');
+  if (/パスは呼び出し元から渡され/.test(reconcile)) {
+    assert.match(SKILL, /出力先パス `projects\/<slug>\/report\.md`/,
+      'research-reconcile は呼び出し元からパスを受け取る前提なので、SKILL.md が明示的に渡すこと');
+  }
+});
+
+test('サブエージェントが失敗した run は記録を残して終わる', () => {
+  // 実測: Issue #10 は phase: synthesize のまま、ラベルもコメントも残さず滞留した。
+  // 失敗を記録せずに終えると、毎時の run が黙って積み上がって誰も気づけない。
+  const from = SKILL.indexOf('### phase: synthesize');
+  assert.ok(from > 0, 'synthesize のフェーズ節が無い');
+  const section = SKILL.slice(from, SKILL.indexOf('### phase:', from + 10) + 1 || undefined);
+  assert.match(section, /loop:blocked/,
+    'synthesize に失敗したときの blocked 手順が無い');
+  assert.match(section, /loop:needs-human/,
+    'synthesize に失敗したときの needs-human 手順が無い');
+  assert.match(SKILL, /黙って同じフェーズをやり直して終わってはならない/,
+    '黙って再試行して終わることを禁じる文言が無い');
+});
+
+test('長文を生成する階層の出力上限が打ち切られない値になっている', () => {
+  // 実測: Issue #10 で gpt-5.5 の出力は 10,705 / 15,612 トークンだった。
+  // 8000 では打ち切られて再実行になり、1回目の課金は meta.json にも残らず消える。
+  const limits = [...SKILL.matchAll(/--max-output-tokens (\d+)/g)].map((m) => Number(m[1]));
+  assert.ok(limits.length >= 3, '--max-output-tokens の指定が見つからない');
+  for (const n of limits) {
+    assert.ok(n >= 16000,
+      `--max-output-tokens ${n} は低すぎる。reasoning_effort: high は推論トークンも出力に数える`);
+  }
+});
