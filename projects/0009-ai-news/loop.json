@@ -4,8 +4,8 @@
   "usecase": "research",
   "slug": "0009-ai-news",
   "branch": "claude/loop-9-ai-news",
-  "phase": "review",
-  "iteration": 1,
+  "phase": "work",
+  "iteration": 2,
   "max_iterations": 5,
   "pr": 12,
   "artifacts": [
@@ -24,7 +24,15 @@
       "kind": "work",
       "by": "claude",
       "at": "2026-10-04"
+    },
+    {
+      "n": 3,
+      "kind": "review",
+      "by": "gemini:review",
+      "at": "2026-10-04",
+      "verdict": "REVISE",
+      "cost_usd": 0.0022
     }
   ],
-  "updated_at": "2026-10-04T08:06:04.758Z"
+  "updated_at": "2026-10-04T11:01:33.953Z"
 }
