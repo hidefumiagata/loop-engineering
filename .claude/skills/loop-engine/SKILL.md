@@ -240,9 +240,28 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
   **draft では作らない。** draft → ready の解除は GraphQL 専用でクラウドから叩けないため、
   開いたまま解除できない PR が残ってしまう。完了の signal は `loop:done` ラベルが持つので draft は不要。
 
-  **本文の末尾に `Closes #<issue>` を必ず入れる。** マージ時に Issue が自動でクローズされる。
-  これが無いと、完了した Issue が open のまま残り、`loop` ラベル付きなので
-  **次の run がまた拾ってしまう**（`loop:done` で除外されるが、ラベルを外すと再開する）。
+  **本文の末尾に `Closes #<issue>` を必ず入れる。`<issue>` は実際の番号に置き換える。**
+  マージ時に Issue が自動でクローズされる。これが無いと、完了した Issue が open のまま残り、
+  `loop` ラベル付きなので**次の run がまた拾ってしまう**
+  （`loop:done` で除外されるが、ラベルを外すと再開する）。
+
+  > **GitHub の自動クローズが成立する条件**（[公式ドキュメント][closing-keyword]）。
+  > 自前で Issue を閉じる処理は書かない。この3条件を満たせば GitHub が閉じる。
+  >
+  > 1. **キーワードが PR 本文にある。** 使えるのは
+  >    `close` / `closes` / `closed` / `fix` / `fixes` / `fixed` / `resolve` / `resolves` / `resolved`
+  > 2. **`#<番号>` が実際の Issue 番号になっている。**
+  >    `Closes #<issue>` とプレースホルダのまま書くと、GitHub は何も紐付けない
+  > 3. **PR の `base` がリポジトリの default branch である。**
+  >    公式ドキュメント曰く「PR 本文の特別なキーワードは、PR が default branch を
+  >    対象にしているときにのみ解釈される」。`config.defaults.base_branch` が
+  >    default branch と一致している必要がある（現在どちらも `main`）
+  >
+  > **クローズは非同期**で、マージの1秒ほど後に反映される（実測）。
+  > マージ直後に閉じていなくても失敗ではない。**手で閉じる前に数十秒待つ。**
+  > それでも閉じない場合だけ、上の3条件を疑う。
+
+  [closing-keyword]: https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
 
   作成した PR 番号を状態の `pr` に入れる。
 - 状態を `phase: review` にする。
