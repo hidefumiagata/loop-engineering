@@ -276,22 +276,43 @@ export function removeLabels(issue, names, repo = repoSlug()) {
   }
 }
 
-/** 既知のフェーズラベル。sync-phase がこの集合の中だけを入れ替える */
+/**
+ * 進行中のフェーズラベル。sync-phase が入れ替えてよいのはこの集合だけ。
+ *
+ * ★ `blocked` を意図的に含めない。`loop:blocked` は listCandidates が除外に使う
+ *   制御ラベルであり、人間が外すまで残らなければならない。ここに入れると、
+ *   次の run の sync-phase が「状態は phase: work なのに loop:blocked が付いている」と見て
+ *   勝手に剥がし、人間が確認していない Issue が再開してしまう。
+ *   実測: Issue #19 が `loop:work` と `loop:blocked` の両方を持った状態で滞留した。
+ */
 export const PHASE_LABELS = [
-  ...new Set([...PHASES.pipeline, ...PHASES.panel].map((p) => `loop:${p}`)),
+  ...new Set(
+    [...PHASES.pipeline, ...PHASES.panel]
+      .filter((p) => p !== 'blocked')
+      .map((p) => `loop:${p}`),
+  ),
 ];
+
+/** 制御ラベル。フェーズの進行では付け外ししない */
+export const BLOCKED_LABEL = 'loop:blocked';
 
 /**
  * フェーズラベルを1つだけに揃える。`loop` / `use:*` / 制御ラベル（needs-human, go, stop）は触らない。
  * 手でラベルを足し引きさせると取り違えが起きるので、この操作をスクリプト側に閉じ込める。
+ *
+ * `loop:blocked` は例外で、`phase: blocked` に揃えるときだけ付ける。
+ * 他のフェーズに揃えるときは**外さない**（外せるのは人間だけ）。
  */
 export function syncPhase(issue, phase, repo = repoSlug()) {
   const want = `loop:${phase}`;
-  if (!PHASE_LABELS.includes(want)) {
-    throw new Error(`未知のフェーズ: ${phase} (有効: ${PHASE_LABELS.join(', ')})`);
+  if (![...PHASE_LABELS, BLOCKED_LABEL].includes(want)) {
+    throw new Error(
+      `未知のフェーズ: ${phase} (有効: ${[...PHASE_LABELS, BLOCKED_LABEL].join(', ')})`,
+    );
   }
   // 読み取りは GET なので DRY でも実行する。でないと dry-run が削除対象を表示できない。
   const have = currentLabels(issue, repo);
+  // 入れ替えるのは進行ラベルだけ。loop:blocked はここでは落とさない
   const stale = have.filter((l) => PHASE_LABELS.includes(l) && l !== want);
   removeLabels(issue, stale, repo);
   if (!have.includes(want)) addLabels(issue, [want], repo);
