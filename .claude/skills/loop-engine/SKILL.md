@@ -128,6 +128,12 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 その場合は同じフェーズをもう一度実行することになる。各フェーズは冪等に書かれているので、
 やり直して構わない（既にあるファイルは上書きされる）。
 
+**`state.phase` が `blocked` または `done` だったとき**（この手順書に対応する節が無い値）:
+古い状態、または人間が手で書き換えた状態である。**推測で再開しない。**
+`loop:needs-human` を付け、Issue に
+「`state.phase` が `<値>` で再開先が決まらない。どのフェーズから再開するかを指示してほしい」
+と書いて run を終える。`history` の最後の `kind` から類推してはならない。
+
 ### 状態が無い場合（ブートストラップ）
 
 1. `slug` を決める: `<4桁ゼロ埋めIssue番号>-<タイトルの英数字ケバブ>`。
@@ -268,10 +274,20 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 | --- | --- | --- | --- |
 | `PASS` | `phase: done` | `loop:done` | PR に完了コメントを投稿する（draft 解除は不要。最初から通常PR） |
 | `REVISE` | `iteration` を +1 して `phase: work` | `loop:work` | — |
-| `BLOCKED` | `phase: blocked` | `loop:blocked` + `loop:needs-human` | 理由を Issue に書く |
+| `BLOCKED` | **`phase` は `work` のまま変えない** | `loop:blocked` + `loop:needs-human` | 理由を Issue に書く |
 
-`iteration` が `max_iterations` を超えたら、verdict が `REVISE` でも `phase: blocked` にし、
-`loop:needs-human` を付けて「上限 N 回に達した。現状の未達項目は…」と Issue に書く。
+`iteration` が `max_iterations` を超えたら、verdict が `REVISE` でも
+`loop:blocked` + `loop:needs-human` を付け、`phase` は `work` のまま残して
+「上限 N 回に達した。現状の未達項目は…」と Issue に書く。
+
+> **★ blocked はラベルで表す。`state.phase` に `blocked` を書かない。**
+> `state.phase` は「次の run がどこから再開するか」を表す値である。
+> ここに `blocked` を書くと、人間がラベルを外したあと**再開先が無くなる**。
+> この手順書に `### phase: blocked` の節は無いので、拾った run は手順書に無い判断を
+> 迫られる（絶対規則2に反する）。実測: Issue #13 が `phase: blocked` のまま残り、
+> ラベルを外しても段階3へ戻れない状態になった。
+> 止めるときは**ラベルだけ**を付け、`phase` は再開すべきフェーズに保つ。
+> これは synthesize の失敗時の扱い（`phase: synthesize` のまま変えない）と同じ原則である。
 
 ### レビュアーが呼べなかったとき
 

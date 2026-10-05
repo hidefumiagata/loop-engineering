@@ -473,3 +473,24 @@ test('突き合わせ役はテキストを返し、本体は転記するだけ�
   assert.match(research, /転記は代行ではない/,
     'research.md に転記と代行の線引きが無い');
 });
+
+test('blocked はラベルで表し、state.phase には書かない', () => {
+  // state.phase は「次の run がどこから再開するか」を表す値。blocked を書くと、
+  // 人間がラベルを外したあと再開先が無くなる。この手順書に ### phase: blocked の節は
+  // 無いので、拾った run は手順書に無い判断を迫られる（絶対規則2に反する）。
+  // 実測: Issue #13 が phase: blocked のまま残り、ラベルを外しても段階3へ戻れなかった。
+  assert.match(SKILL, /`state\.phase` に `blocked` を書かない/,
+    'phase に blocked を書かせない明示が無い');
+
+  // 手順書が節を持たないフェーズを state.phase に使っていないこと
+  const sections = [...SKILL.matchAll(/^### phase: ([a-z]+)/gm)].map((m) => m[1]);
+  assert.ok(sections.length >= 8, `phase 節の抽出に失敗 (${sections.length} 件)`);
+  for (const p of ['blocked', 'done']) {
+    assert.ok(!sections.includes(p),
+      `### phase: ${p} の節が増えている。増やすならこのテストの前提を見直すこと`);
+  }
+
+  // 節が無い値を拾ったときの扱いが書かれていること
+  assert.match(SKILL, /推測で再開しない/,
+    'state.phase に未対応の値が入っていたときの扱いが書かれていない');
+});
