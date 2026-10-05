@@ -1,6 +1,6 @@
 ---
 name: daily-jobs
-description: 毎日決まった時刻に実行される定期ジョブを1 run 分まとめて実行する。loop/jobs/ の定義（Hacker News Top10 要約、AIニュース5点など）に従って成果物を作り、PR を作って自動マージする。Issue は使わない。Issue 駆動のループ（loop-engine）とは別の routine から呼ばれる。
+description: 毎日決まった時刻に実行される定期ジョブを1 run 分まとめて実行する。loop/jobs/ の定義（Hacker News Top10 要約、AIニュース5点など）に従って成果物を作り、PR を作り、マージを1回試す（拒否されたら人間に渡す）。Issue は使わない。Issue 駆動のループ（loop-engine）とは別の routine から呼ばれる。
 ---
 
 # daily-jobs
@@ -13,7 +13,7 @@ description: 毎日決まった時刻に実行される定期ジョブを1 run �
 | 入力 | GitHub Issue | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **自動でマージする** |
+| PR | 人間がマージする | **マージを1回試す。** 拒否されたら記録して人間に渡す |
 
 **Issue を作らない・触らない・コメントしない。** この routine は Issue と無関係である。
 
@@ -99,7 +99,7 @@ git rev-parse --abbrev-ref HEAD
 
 **全ジョブが失敗した場合もログだけはコミットする。** 沈黙して終わらない。
 
-## Step 5. コミットして PR を作り、マージする
+## Step 5. コミットして PR を作り、マージを試す
 
 ```bash
 git add -A
@@ -116,65 +116,55 @@ REPO=$(node -e "import('./loop/bin/issue-state.mjs').then(m=>console.log(m.repoS
 cat > /tmp/pr.json <<EOF
 { "title": "daily($DATE): 定期ジョブの成果物",
   "head": "claude/daily-$DATE", "base": "main",
-  "body": "<実行ログの表をそのまま貼る>\n\n自動生成・自動マージ。" }
+  "body": "<実行ログの表をそのまま貼る>\n\n自動生成。" }
 EOF
-PR=$(gh api -X PUT "repos/$REPO/pulls" --input /tmp/pr.json --jq .number 2>/dev/null \
-  || gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number)
+# PR 作成は POST。PUT は作成のメソッドではないので、以前は必ず失敗してから
+# フォールバックが走っていた（毎回1回ぶん無駄な呼び出しが出ていた）
+PR=$(gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number)
 echo "PR #$PR"
 ```
 
 **Issue 番号を書かない。** `Closes #N` を入れてはならない。この routine は Issue と無関係で、
 無関係な Issue を閉じてしまう事故になる。
 
-### マージする
-
-`gh pr merge` は GraphQL なので使えない。REST の merge を使う。
-
-**まず `mergeable` が算出されるのを待つ。いきなり merge を叩かない。**
-GitHub は PR 作成直後は `mergeable` を `null`（未算出）で返し、その状態で merge を叩くと
-`405 Base branch was modified` で失敗する。**これが自動マージが失敗する主な原因である**
-（実測: PR #17。作成直後は `mergeable=null`、数秒後に `mergeable=true` / `mergeable_state=clean`
-になり、同じ REST 呼び出しがそのまま成功した）。
-
-```bash
-# mergeable が null でなくなるまで待つ（最大30秒）。null は「まだ計算中」の意味
-for i in 1 2 3 4 5 6; do
-  MERGEABLE=$(gh api "repos/$REPO/pulls/$PR" --jq '.mergeable | tostring')
-  [ "$MERGEABLE" != "null" ] && break
-  sleep 5
-done
-echo "mergeable=$MERGEABLE"
-```
-
-`mergeable=false` なら衝突している。再試行しても直らないのでマージを諦める。
+### マージを1回だけ試す。拒否されたら記録して人間に渡す
 
 ```bash
 cat > /tmp/merge.json <<EOF
 { "merge_method": "squash", "commit_title": "daily($DATE): 定期ジョブの成果物 (#$PR)" }
 EOF
-gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json --jq '{merged, sha}'
-```
-
-**失敗したら 5秒待って最大3回まで再試行する。** 試行回数で数える。経過時間で打ち切らない
-（`$SECONDS` はシェルの起動からの秒数なので、シェルが生きていると初回で打ち切られる）。
-
-```bash
-MERGED=no
-for i in 1 2 3; do
-  if gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json > /tmp/merge-out.json 2>/tmp/merge-err.txt; then
-    MERGED=yes; break
-  fi
+if gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json > /tmp/merge-out.json 2>/tmp/merge-err.txt; then
+  MERGED=yes
+else
+  MERGED=no
   cat /tmp/merge-err.txt   # ★ 失敗の本文を必ず出す。捨ててはならない
-  sleep 5
-done
+fi
 echo "merged=$MERGED"
 ```
 
-**エラー本文を `>/dev/null` で捨ててはならない。** 捨てると、次に失敗したときに
-`mergeable` 未算出なのか衝突なのか権限なのかを誰も切り分けられない。
+**試すのは1回だけ。再試行しない。**
 
-3回とも失敗したら**マージを諦めて PR を残す**。成果物は PR に残っているので失われない。
-**そのうえで、諦めた事実を記録する:**
+> **実測: マージが拒否されることがある。**
+> `daily-2026-10-06` の PR #27 では、ハーネス（Claude Code の auto-mode 権限分類器）が
+> merge 呼び出しを `Merge Without Review`（レビュー無しのマージ）と判定し、
+> **GitHub API に届く前に**止めた。これはツールの許可不足ではないので
+> `permissions.allow` では緩和できない（拒否理由が「レビューが無い」であり、
+> 許可リストが答える種類の問いではない）。
+>
+> **再試行しても結果は変わらない。** 権限判定は決定的で、同じ呼び出しを3回叩いても
+> 同じ理由で3回拒否されるだけで、run とトークン枠を無駄にする。
+> 衝突（`mergeable: false`）も再試行では直らない。だから**1回で判断する。**
+>
+> GitHub 側の auto-merge も代わりにはならない。このリポジトリは private かつ無料プランで、
+> 前提になるブランチ保護と必須チェックを有効化できない
+> （`GET /branches/main/protection` が 403 `Upgrade to GitHub Pro`）。
+>
+> **ただし「必ず拒否される」と決めつけない。** 拒否が記録されているのは PR #27 の1件だけで、
+> `daily-2026-10-05` の PR #17 が未マージだった理由は記録が無く**分かっていない**
+> （ログ追記の手順がまだ無かった）。権限の状況が変われば通る可能性があるので、
+> 呼び出し自体は残す。1回で済むので無駄も小さい。
+
+**`MERGED=no` のときは、諦めた事実を記録する。**
 
 1. `daily/_log/$DATE.md` の末尾に「マージできなかった旨とエラー本文」を追記する
 2. `git commit` して `git push`（**ブランチはそのまま。PR は作り直さない**）
@@ -182,15 +172,16 @@ echo "merged=$MERGED"
 
 > **Step 4 でログを書いた時点ではマージ結果はまだ分からない。**
 > だからマージを諦めたときだけ、ログに1回だけ追記して push する。
-> この追記を省くと「PR が残っているが理由がどこにも無い」状態になる。
+> **この追記があったおかげで PR #27 の拒否理由が分かった。**
+> 省くと「PR が残っているが理由がどこにも無い」状態になる（PR #17 がまさにそれだった）。
 
-マージ後、ブランチはリポジトリ設定（`delete_branch_on_merge`）で自動削除される。
-自分で削除しなくてよい。
+マージできた場合、ブランチはリポジトリ設定（`delete_branch_on_merge`）で自動削除される。
+できなかった場合も成果物は PR に残るので失われない。
 
 ## Step 6. 通知
 
-`PushNotification` で結果を知らせる。成功したジョブ数・失敗したジョブ・PR 番号・
-マージできたかどうかを1〜2文で。
+`PushNotification` で結果を知らせる。成功したジョブ数・失敗したジョブ・PR 番号と、
+**マージできたかどうか**を1〜2文で。できなかったらその理由も。
 
 ---
 
@@ -200,10 +191,10 @@ echo "merged=$MERGED"
 | --- | --- |
 | 有効なジョブが0件 | 何もせず終了。ブランチも作らない |
 | 一部のジョブが失敗 | 残りを実行し、ログに記録して PR を作る |
-| 全ジョブが失敗 | 実行ログだけをコミットして PR を作りマージする。沈黙しない |
+| 全ジョブが失敗 | 実行ログだけをコミットして PR を作る。沈黙しない |
 | push が拒否された | ブランチ名が `claude/` 始まりか確認する |
 | PR 作成が失敗 | push 済みなので成果物は残る。通知とログに書いて終える |
-| マージが3回失敗 | PR を残して終える。成果物は失われない |
+| マージが拒否された | **再試行しない。** エラー本文をログに追記して push し、PR を残して人間に渡す |
 
 ## 禁止事項
 
@@ -213,4 +204,5 @@ echo "merged=$MERGED"
 - 成果物を捏造すること。件数合わせのために中身の薄い項目を足すこと
 - 読んでいない記事を要約すること
 - 半端な成果物を残すこと（失敗したジョブのファイルは消す）
-- `loop/jobs/` の定義を自分で書き換えること（定義を変えるのは人間の仕事）
+- **`loop/` と `.claude/` を書き換えること。** ジョブ定義も手順書も、変えるのは人間の仕事である。
+  `loop/jobs/` は読むだけ。成果物は必ず `daily/` に置く

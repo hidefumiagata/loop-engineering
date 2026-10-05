@@ -117,55 +117,45 @@ test('daily-jobs が GraphQL 経路の gh を使っていない', () => {
   assert.match(skill, /pulls\/\$PR\/merge/, 'REST でマージする');
 });
 
-test('マージ失敗時に成果物を失わない手順になっている', () => {
+test('PR 作成は POST で、PUT のフォールバックを残していない', () => {
+  // PUT は PR 作成のメソッドではない。以前は PUT → 失敗 → POST の順で書かれていたため、
+  // 毎回1回ぶん無駄な呼び出しが出ていた。
   const skill = read('.claude/skills/daily-jobs/SKILL.md');
-  assert.match(skill, /3回とも失敗したら.*PR を残し/s);
-  assert.match(skill, /成果物は PR に残っているので失われない/);
+  assert.match(skill, /-X POST "repos\/\$REPO\/pulls"/, 'POST で PR を作る');
+  assert.doesNotMatch(skill, /-X PUT "repos\/\$REPO\/pulls"/,
+    'PR 作成に PUT を使っている。PUT は作成のメソッドではない');
 });
 
-test('自動マージは mergeable の算出を待ってから叩く', () => {
-  // 実測: PR #17 は作成直後 mergeable=null で、その状態で merge を叩くと
-  // 405 Base branch was modified になる。数秒後には clean になり同じ呼び出しが通った。
-  // これが daily-jobs の自動マージが失敗する主な原因だった。
+test('マージは1回だけ試し、再試行しない', () => {
+  // 守る不変条件: マージの呼び出しは1回。再試行しない。結果は必ず記録する。
+  //
+  // 根拠: PR #27 でハーネス（auto-mode 権限分類器）が merge を Merge Without Review と
+  // 判定して GitHub API に届く前に止めた。権限判定は決定的なので再試行しても
+  // 同じ理由で拒否されるだけで、run とトークン枠を無駄にする。
+  // 一方で「必ず拒否される」とも言えない（PR #17 が未マージだった理由は記録が無く不明）。
+  // だから呼び出しは残し、1回で判断する。
   const skill = read('.claude/skills/daily-jobs/SKILL.md');
-  assert.match(skill, /mergeable/,
-    'mergeable を確認する手順が無い');
-  assert.match(skill, /いきなり merge を叩かない/,
-    'mergeable 未算出のまま merge を叩かせない明示が無い');
-  // 待ちループが merge より前に書かれていること
-  const wait = skill.indexOf('.mergeable | tostring');
-  const merge = skill.indexOf('pulls/$PR/merge');
-  assert.ok(wait > 0, 'mergeable のポーリングが無い');
-  assert.ok(wait < merge, 'mergeable の待ちが merge より後に書かれている');
-});
 
-test('マージの再試行は回数で数え、エラー本文を捨てない', () => {
-  const skill = read('.claude/skills/daily-jobs/SKILL.md');
-  // $SECONDS はシェルの起動からの秒数。シェルが生きていると初回で打ち切られる。
-  // 本文で「使ってはならない理由」として言及するのは許すので、コードブロックだけを見る
-  const code = [...skill.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
-  assert.ok(code.length > 0, 'bash のコードブロックが見つからない');
-  assert.doesNotMatch(code, /\$SECONDS/,
-    '$SECONDS で打ち切ると、シェルの生存時間に依存して再試行されなくなる');
-  assert.match(skill, /試行回数で数える/,
-    '再試行を回数で数える明示が無い');
-  // 失敗本文を捨てていないこと（merge の行で >/dev/null していない）
-  const mergeLines = skill.split('\n').filter((l) => /pulls\/\$PR\/merge/.test(l));
-  assert.ok(mergeLines.length > 0, 'merge の呼び出しが無い');
-  for (const l of mergeLines) {
-    assert.doesNotMatch(l, />\s*\/dev\/null/,
-      `merge の出力を捨てている。失敗の切り分けができなくなる: ${l.trim()}`);
-  }
-  assert.match(skill, /エラー本文を `>\/dev\/null` で捨ててはならない/,
-    'エラー本文を捨てないことの明示が無い');
-});
+  const calls = (skill.match(/pulls\/\$PR\/merge/g) || []).length;
+  assert.equal(calls, 1, `merge の呼び出しが ${calls} 箇所ある。1回だけにすること`);
 
-test('マージを諦めたときは理由をログに追記する手順がある', () => {
-  // Step 4 でログを書いた時点ではマージ結果が分からないので、諦めたときだけ追記する。
-  // 省くと「PR が残っているが理由がどこにも無い」状態になる（実測: PR #17）。
-  const skill = read('.claude/skills/daily-jobs/SKILL.md');
-  assert.match(skill, /daily\/_log\/\$DATE\.md` の末尾に/,
-    'マージ失敗をログに追記する手順が無い');
-  assert.match(skill, /PR は作り直さない/,
-    '追記時に PR を作り直させない明示が無い');
+  // merge が再試行ループの中に入っていないこと
+  const lines = skill.split('\n');
+  const mi = lines.findIndex((l) => l.includes('pulls/$PR/merge'));
+  const context = lines.slice(Math.max(0, mi - 6), mi + 1).join('\n');
+  assert.doesNotMatch(context, /for\s+i\s+in|^\s*until\s|^\s*while\s/m,
+    'merge が再試行ループの中にある。権限判定は決定的なので再試行しても拒否される');
+  assert.match(skill, /試すのは1回だけ。再試行しない/, '1回だけという明示が無い');
+
+  // 拒否理由を手順書に残す（次に同じ症状を見たとき照合できるように）
+  assert.match(skill, /Merge Without Review/, '拒否理由が書かれていない');
+
+  // エラー本文を捨てない。捨てると原因が分からなくなる（PR #17 がそれだった）
+  const mergeLine = lines[mi];
+  assert.doesNotMatch(mergeLine, />\s*\/dev\/null/, `merge の出力を捨てている: ${mergeLine.trim()}`);
+  assert.match(skill, /失敗の本文を必ず出す/, 'エラー本文を残す明示が無い');
+
+  // 結果をログに残す。これがあったから PR #27 の原因が分かった
+  assert.match(skill, /`daily\/_log\/\$DATE\.md` の末尾に/,
+    'マージできなかったことをログに追記する手順が無い');
 });

@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test loop/test/issue-state.test.mjs loop/test/wiring.test.mjs loop/test/diagnose.test.mjs loop/test/synthesis-check.test.mjs loop/test/jobs.test.mjs",
+    "test": "node --test loop/test/*.test.mjs",
     "labels": "bash loop/bin/setup-labels.sh"
   }
 }

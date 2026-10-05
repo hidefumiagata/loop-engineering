@@ -40,7 +40,9 @@
           "price_per_mtok": {
             "in": 0.25,
             "out": 1.5
-          }
+          },
+          "max_output_tokens": 8000,
+          "$comment": "同期呼び出し。エージェントプロキシの約30秒制限内に返しきる必要があるため上限を抑える"
         },
         "propose": {
           "enabled": true,
@@ -49,7 +51,8 @@
             "in": 0.75,
             "out": 3.75
           },
-          "$comment": "2026-12-31 までの価格。2027-01-01 以降は in 1.50 / out 7.50 に変わるので要更新"
+          "$comment": "2026-12-31 までの価格。2027-01-01 以降は in 1.50 / out 7.50 に変わるので要更新。Gemini に background は無く同期呼び出しなので、約30秒制限内に返しきれる 8000 に抑える（16000 にすると 502 になった: Issue #25）",
+          "max_output_tokens": 8000
         }
       }
     },
@@ -67,7 +70,8 @@
           "price_per_mtok": {
             "in": 0.25,
             "out": 2
-          }
+          },
+          "max_output_tokens": 8000
         },
         "evaluate": {
           "enabled": true,
@@ -76,7 +80,8 @@
             "in": 0.25,
             "out": 2
           },
-          "reasoning_effort": "low"
+          "reasoning_effort": "low",
+          "max_output_tokens": 8000
         },
         "propose": {
           "enabled": true,
@@ -87,7 +92,8 @@
           },
           "reasoning_effort": "high",
           "background": true,
-          "$comment": "長い生成はプロキシの約30秒制限に当たるため background で非同期化する"
+          "$comment": "長い生成はプロキシの約30秒制限に当たるため background で非同期化する。非同期なので上限を上げてよい（8000 では gpt-5.5 が打ち切られた: Issue #10）",
+          "max_output_tokens": 16000
         }
       }
     }

@@ -82,7 +82,11 @@
 
 - `findings/official.md` と `findings/community.md` のパス
 - `plan.md` のパス
-- 出力先のパス `projects/<slug>/report.md`
+
+**出力先は渡さない。** このサブエージェントは Write を持たない。
+レポート本文をテキストで返させ、**本体が `projects/<slug>/report.md` に一字一句変えずに転記する。**
+ハーネスがサブエージェントの report ファイル書き込みを拒否するため
+（実測: Issue #13 と #19 がこれで2回止まった）。
 
 突き合わせの規則はサブエージェント側の定義に書いてある。要点は次のとおり。
 

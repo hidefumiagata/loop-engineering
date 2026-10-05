@@ -36,22 +36,23 @@ Cloud セッションがリポジトリを clone / push するために必要。
 bash loop/bin/setup-labels.sh
 ```
 
-17件のラベルが作成される。べき等なので何度実行してもよい。
+ラベルが作成される（件数はスクリプトが出力する）。べき等なので何度実行してもよい。
 
 ## 4. APIキーを発行する
 
 ### Gemini（必須）
 
 1. <https://aistudio.google.com/apikey> でキーを発行する
-2. **課金を有効にする。** `gemini-3.1-pro` を panel の提案・評価で使うため。
+2. **課金を有効にする。** `gemini-3.8-flash` を panel の提案・敵対的レビュー・改稿で使うため。
    通常レビューは無料枠モデル（`gemini-3.1-flash-lite`）のままなので、
    合議を回さなければ課金は発生しない
 
 ### OpenAI（panel モードを使うなら必須）
 
 1. <https://platform.openai.com/api-keys> でキーを発行する
-2. **使用量上限を設定する**（Settings → Limits）。月 $10 程度で十分。
-   合議8ラウンドでも $1 未満だが、設定ミスに対する最終防壁として必ず入れる
+2. **使用量上限を設定する**（Settings → Limits）。設定ミスに対する最終防壁として必ず入れる。
+   **合議は1ラウンド約 $1.44（実測）**で、月4件×2ラウンド＝8ラウンドなら約 $11.5。
+   月 $10 だと先に当たるので、頻度を落とすか上限を上げるかを決めてから設定する
 
 合議を使わないなら OpenAI キーは不要。`loop/config.json` の
 `providers.openai.tiers.*.enabled` をすべて `false` にしておけば呼ばれない。
@@ -131,20 +132,25 @@ API credentials の欄が出ない）。環境にカーソルを合わせて右�
 手順書に書かれていない判断を勝手に足さないこと。
 ```
 
-### cron を 1日3回にする
+### cron を毎時にする
 
-作成フォームはプリセット（hourly / daily / weekdays / weekly）しか選べない。
-いずれかを選んで保存した後、ローカルの CLI で cron 式を指定する。
+作成フォームのプリセット（hourly / daily / weekdays / weekly）から **hourly** を選ぶ。
+cron 式は `0 * * * *`（UTC）になる。別の頻度にしたい場合は、保存後に
+ローカルの CLI で指定できる。
 
 ```
 /schedule update
 ```
 
-対話で `loop-engine` を選び、cron を `0 0,6,12 * * *`（UTC）に設定する。
-= JST 09:00 / 15:00 / 21:00 の3回。
+**`loop/config.json` の `preset` と必ず揃えること。** 現在は毎時なので `"hourly"`
+（`granularity: "phase"` / `issues_per_run: 1`）。毎時なら run が潤沢で律速はトークン枠に移るため、
+1 run を短く保つ粒度が正しい。1日数回に落とすなら run 数が律速になるので `preset` は
+`"pro"`（`granularity: "iteration"`）に変える。
+理由は `docs/ARCHITECTURE.md`「なぜ『1 run = 1 イテレーション』なのか」を参照。
 
-**なぜ3回か**: routines には日次実行上限がある（アカウント単位・全routine合算・UTC 0時リセット）。
-cron で3回使い、残り2回を手動発火（Run now / API）の予備に残す配分である。
+routines には日次実行上限がある（アカウント単位・全routine合算・UTC 0時リセット）。
+**公称値は確認できていない**ので、残り回数は claude.ai/code/routines で見る。
+上限に当たってスキップされた run は翌日に繰り越されない。
 
 ### API トリガーを足す（手動発火用）
 
@@ -243,10 +249,10 @@ routine 詳細ページで **Run now**。確認すること:
 - [ ] Issue に「ループ状態」コメントが1件できている
 - [ ] フェーズが plan → work → review → 判定 まで進んでいる
 - [ ] `projects/0001-*/report.md` `sources.md` `journal/` ができている
-- [ ] draft PR が立っている
+- [ ] 通常 PR が立っている（draft ではない）
 - [ ] `journal/NNN-review.md` の冒頭が `reviewer: gemini:review (...)` である
       （`claude (fallback)` になっていたら Gemini 側の設定を疑う）
-- [ ] Issue コメントに実測コストの表が入っている
+- [ ] `journal/NNN-review.json.meta.json` に実測コストが入っている（Issue には書かれない）
 
 ### 7-6. panel の E2E
 
@@ -255,29 +261,48 @@ Issue を1件作る（用途: 合議）。例:
 > このループ基盤の状態保持方式を決めたい。Issueコメント / リポジトリ内ファイル /
 > 外部DB の3案を比較して、運用の単純さを最優先に選びたい。
 
-**Run now を2回**（1回目で brief、2回目で propose〜decide）。確認すること:
+panel は4段（propose → challenge → revise → synthesize）で、`preset: "hourly"` では
+1 run = 1フェーズなので **brief を含めて5 run** かかる。`Run now` を順に叩いて確認する。
 
-- [ ] 1回目で `brief.md` ができ、基準表が Issue に投稿されている
-- [ ] `criteria.json` の内容が `brief.md` の表と一致している
-- [ ] 2回目で `proposals/A.md` `B.md` `C.md` と `.authors.json` が揃っている
+**brief（1 run 目）**
+
+- [ ] `brief.md` と `criteria.json` ができている
+- [ ] `criteria.json` の内容が `brief.md` の評価基準の表と一致している
+- [ ] **Issue には状態コメントだけがある**（基準表を Issue に貼っていない）
+
+**propose（2 run 目）**
+
+- [ ] `proposals/A.md` `B.md` `C.md` と `.authors.json` が揃っている
 - [ ] **git log で Claude の提案コミットが他案の取得より前にある**（独立性の証跡）
       ```bash
       git log --oneline --name-only claude/loop-<n>-<slug> | head -30
       ```
       `propose(#n): claude の案（他案取得前の単独コミット）` が単独で先にあること
-- [ ] `evaluations/by-claude.json` `by-gemini.json` `by-openai.json` が揃っている
-- [ ] `scores.json` の `generated_by` が `loop/bin/aggregate.mjs` である
-- [ ] `scores.json` に `winner` と `winner_excl_self`（自己採点除外の首位）の両方がある
-      食い違っている場合、`decision.md` に両方の順位が並記されていること
-- [ ] `decision.md` の数値が `scores.json` と一致している
-- [ ] `decision.md` に「不採用案から拾うべき要素」「保存すべき反対意見」「この合議の限界」がある
-- [ ] `scores.json` の `warnings` が `decision.md` に全件転記されている
-- [ ] `loop:needs-human` が付いて**停止している**
+- [ ] 匿名化前のファイル（`claude.md` `_gemini.md` `_openai.md`）が消えている
+- [ ] `*.meta.json` が `proposals/` に残っている（コストの証跡）
 
-その後、Issue に `/decide B` とコメントし `loop:go` ラベルを付けて **Run now**:
+**challenge（3 run 目）**
 
-- [ ] `plan.md` が生成され、pipeline の work に引き継がれている
-- [ ] `decision.md` の `decided_by` が更新されている
+- [ ] `challenges/by-claude.json` `by-gemini.json` `by-openai.json` が揃っている
+- [ ] 各ファイルの `targets` が**自分以外の2案だけ**を対象にしている
+- [ ] どの `targets` にも `strongest_point` が入っている（全否定になっていない）
+- [ ] `challenges/` に `by-*.json` 以外が無い（`*.meta.json` は `journal/` にある）
+
+**revise（4 run 目）**
+
+- [ ] `proposals/A.v2.md` `B.v2.md` `C.v2.md` が揃っている
+- [ ] 各 `.v2.md` に「改稿で変えた点」と「反論」の節がある
+
+**synthesize（5 run 目）**
+
+- [ ] `answer.md` と `provenance.json` ができている
+- [ ] `synthesis-check.json` の `generated_by` が `loop/bin/synthesis-check.mjs` である
+- [ ] `synthesis-check.json` の `warnings` が空である
+      （空でなければ、統合役に差し戻した記録が `journal/` にあること）
+- [ ] 統合役自身の案の `ratio` が `bias_threshold`（均等配分の1.6倍）を下回っている
+- [ ] `answer.md` に「見解が割れた点」「攻撃で崩れた主張」「この答えの限界」がある
+- [ ] PR 本文に**結論の要旨・寄与比率・severity** が載っている
+- [ ] `loop:done` が付き、**PR はマージされずに残っている**（確定は人間の操作）
 
 ### 7-7. 失敗系
 
@@ -319,7 +344,7 @@ Issue を1件作る（用途: 合議）。例:
 | `gh` が `403 GitHub GraphQL is not available from Claude Code sessions` | クラウドセッションの制約。`--json` 系サブコマンドは使えない。`gh api`（REST）か `issue-state.mjs` のサブコマンドに置き換える。`npm test` の wiring テストがこの種の混入を検出する |
 | 成果物が `claude/loop-<n>-<slug>` 以外のブランチに入った | セッションが自動生成ブランチで始まり、`git checkout -B` が実行されていない。SKILL.md の Step 2 を確認する |
 | 日次上限に達した | スキップされた run は**翌日に繰り越されない**。cron 回数を減らすか Max を検討する |
-| Issue を作った直後の Run now が「対象なし」で終わる | `gh issue list --label` が引く GitHub のラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
+| Issue を作った直後の Run now が「対象なし」で終わる | 除外ラベル（`loop:stop` / `loop:done` / `loop:blocked` / `loop:needs-human`）が付いていないか確認する。REST の `/issues?labels=` は検索インデックスを経由しないので、反映待ちは起きない。旧記述（ラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
 
 ## プランを Max に上げたとき
 

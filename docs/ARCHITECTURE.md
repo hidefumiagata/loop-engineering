@@ -8,13 +8,14 @@ GitHub Issue に目的を書くと、Claude Cloud の routine が自律的に作
 ```
 GitHub (private)
   Issues(label:loop) ──── 状態は Issue 上の固定コメント1件に集約 ────┐
-  branches claude/loop-<n>-<slug> → draft PR                        │
+  branches claude/loop-<n>-<slug> → PR（通常PR。draft は使わない）                        │
   projects/<n>-<slug>/ 成果物と過程の記録                             │
         ▲ clone / push / gh（GH_TOKEN は自動設定）                    │
         │                                                           │
 Claude Cloud Routine "loop-engine" ─────────────────────────────────┘
-  trigger : cron 0 0,6,12 * * * (UTC) = JST 09/15/21 の3回
-            + API /fire（手動発火。日次上限5のうち2 run を予備に残す）
+  trigger : cron 0 * * * * (UTC) = 毎時（loop/config.json の preset: "hourly" と対応）
+            + API /fire（手動発火）
+            ※ claude.ai 側の実設定が正。ここと config.preset は必ず揃えること
   env     : loop-env（Network=Full / API credentials: Gemini・OpenAI）
   model   : Sonnet 5
   prompt  : 「.claude/skills/loop-engine/SKILL.md を読んで厳密に従え」
@@ -35,7 +36,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 | 入力 | GitHub Issue（`loop` ラベル） | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **自動でマージする** |
+| PR | 人間がマージする | **マージを1回試す**（拒否されたら人間へ） |
 | 許可ツール | + `Agent`（調査のサブエージェント） | Web と git だけ |
 
 **分けた理由**: 定期ジョブには「目的を達成したか」という判定が無い。
@@ -46,17 +47,41 @@ Claude Cloud Routine "loop-engine" ───────────────
 定期ジョブは Issue を**作らない・触らない・コメントしない**。
 PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue を閉じてしまうため）。
 
-### 自動マージの実装
+### daily-jobs のマージは「1回試して、駄目なら記録して人間へ」
 
-`gh pr merge` は GraphQL なのでクラウドから使えない。REST を使う。
+| 事実 | 出典 |
+| --- | --- |
+| PR #27 のマージは**ハーネスが拒否した**。Claude Code の auto-mode 権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める | `daily/_log/2026-10-06.md` の「マージ結果」節（run が自分で記録した） |
+| PR #17 も未マージで残ったが、**理由は記録が無く分かっていない**。ログ追記の手順がまだ無かった | `daily/_log/2026-10-05.md` にマージに関する記述が無い。最終的に人間が手でマージした |
+| `permissions.allow` では緩和できない | 拒否理由が「レビューが無い」であり、ツールの許可不足ではない |
+| GitHub 側の auto-merge は代わりにならない | 前提のブランチ保護と必須チェックを有効化できない。private かつ無料プランのため `GET /branches/main/protection` が 403 `Upgrade to GitHub Pro` |
 
-```
-PUT /repos/{owner}/{repo}/pulls/{n}/merge   merge_method: squash
-```
+**拒否が確認できているのは1件だけ**なので、「必ず拒否される」とは言えない。
+一方で権限判定は決定的なので、拒否された同じ呼び出しを**再試行しても結果は変わらない**。
+衝突（`mergeable: false`）も再試行では直らない。
 
-**作成直後は失敗しうる。** GitHub がマージ可否を計算するまで数秒かかり、
-その間は 405 が返る。5秒間隔で最大3回まで再試行し、
-それでも駄目なら**マージを諦めて PR を残す**。成果物は PR にあるので失われない。
+そこで **1回だけ試し、結果を必ずログに記録する**設計にした。
+
+- 通れば自動で入る。権限の状況が変われば、手順を直さずにそのまま通るようになる
+- 通らなければ1 API 呼び出しの損で済み、**理由が `daily/_log/` に残る**
+- 再試行はしない。run とトークン枠を無駄にするだけである
+
+この「結果を記録する」部分が実際に効いた。PR #17 のときは記録が無かったので
+未マージの理由が分からず、PR #27 では記録があったので一度で原因が特定できた。
+
+### 出力上限は階層ごとの制約として config に持つ
+
+プロキシの約30秒制限（下表）に対し、上限の正解は**同期か非同期かで逆を向く**。
+
+| 階層 | `background` | `max_output_tokens` | 理由 |
+| --- | --- | --- | --- |
+| `openai:propose` | `true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
+| `gemini:propose` | なし | 8000 | 同期。30秒内に返しきる必要がある。16000 にしたら 502 で合議が propose から進めなくなった（Issue #25） |
+
+この非対称を手順書の散文で管理すると必ずずれる。実際に一度ずれて Issue #25 を止めた。
+だから数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、
+`ask-llm.mjs` がそこから読む。手順書は `--max-output-tokens` を渡さない。
+wiring テストが「`background` の無い階層は 8000 以下」を強制する。
 
 ## なぜ GitHub Actions ではないのか
 
@@ -69,6 +94,31 @@ PUT /repos/{owner}/{repo}/pulls/{n}/merge   merge_method: squash
 
 代償は次節の制約である。
 
+### テストはローカルの hook で走らせる（Actions は使わない）
+
+**GitHub Actions は1本も置かない。** 無料枠を消費しない方針を、テストでも曲げない。
+代わりに Claude Code の **PostToolUse hook** で、仕組みを編集した直後に `npm test` を走らせる。
+
+| | 置き場 |
+| --- | --- |
+| 設定 | `.claude/settings.json` の `hooks.PostToolUse`（`Edit` / `Write` に反応） |
+| 実体 | `loop/bin/hook-test.mjs` |
+
+動き方:
+
+- 編集されたファイルが `loop/**` `.claude/**` `package.json` なら `npm test` を走らせる
+- `projects/**` `daily/**` は対象外。**ループが毎 run 触る場所で、テストと無関係**
+- 通ったら黙る。落ちたら `decision: "block"` で失敗したテスト名を Claude に返す
+- `jq` は使わない。ローカルにもサンドボックスにも無いので、stdin の解析も Node で行う
+
+設定に長いワンライナーを埋めず、ロジックを `loop/bin/` に置いているのは
+他のスクリプトと同じ理由である（版管理でき、ユニットテストできる）。
+`isMachinery()` と `failedLines()` は純関数で、`loop/test/hook-test.test.mjs` が検証する。
+
+**ループ自身は `npm test` を走らせない。** `loop/` と `.claude/` を書き換える手順が
+そもそも無く（禁止事項にも明記）、走らせる手順を置いても発火しないためである。
+万一ループが仕組みを触れば、この hook が同じように止める。
+
 ## 前提にしている制約
 
 | 制約 | 出典 | 設計上の対応 |
@@ -80,7 +130,7 @@ PUT /repos/{owner}/{repo}/pulls/{n}/merge   merge_method: squash
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
-| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ち、Gemini Flash は成功した | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
+| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ちた。Gemini Flash は当初成功していたが、出力上限を 8000→16000 に上げた途端 502 になった（Issue #25）。**モデルではなく生成の長さが効く** | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
 | **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを無視する**（`NODE_USE_ENV_PROXY` は Node 24 以降、サンドボックスは Node 22） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
 | **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
 | **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |
@@ -117,13 +167,15 @@ plan(1) + work(3) + review(3) = 7 run
 pipeline:  plan → work → review ─┬─ PASS ──→ done
                    ↑             ├─ REVISE → work （iteration++）
                    └─────────────┘
-                                 └─ BLOCKED → blocked + needs-human
-           iteration > max_iterations → blocked + needs-human
+                                 └─ BLOCKED → phase は work のまま
+                                              + loop:blocked + loop:needs-human
+           iteration > max_iterations → 同じ扱い
 
-panel:     brief → propose → evaluate → synthesize → critique ─┬─ PASS → PR作成 → done
-             ↑                                     ↑ REVISE   │        （マージは人間）
-             │                                     └──1回だけ──┘
-             └── 重み3が全案未達 / BLOCKED のとき round++ して propose へ（max_panel_rounds まで）
+panel:     brief → propose → challenge → revise → synthesize → PR作成 → done
+                                                                （マージは人間）
+
+★ blocked は phase ではなくラベルで表す。phase には「次にどこから再開するか」を残す。
+  phase: blocked と書くと、人間がラベルを外したあと再開先が無くなる（実測: Issue #13）。
 ```
 
 ### Issue に成果物を書かない
@@ -140,7 +192,7 @@ run ごとに結果コメントを積むと Issue が読めなくなり、
 成果物の正がどこにあるのかが曖昧になる。読む場所を PR に一本化している。
 やったこと・コスト・使った他社LLM は `journal/` と `*.meta.json` に残り、PR から辿れる。
 
-ラベルは状態の人間向けミラーであり、`gh issue list` のフィルタでもある。
+ラベルは状態の人間向けミラーであり、REST の `/issues?labels=` のフィルタでもある。
 `loop:stop` は緊急停止スイッチで、`issue-state.mjs list` が即座に対象から外す。
 
 ### 冪等性
@@ -163,7 +215,8 @@ run が途中で落ちた場合、状態コメントは更新されていない�
 「公式に書いてあった気がするが実はブログの記述だった」という取り違えが起き、
 しかも後から検証できない。文脈を分けておけば突き合わせる相手が残る。
 
-**突き合わせ役には Web ツールを与えていない**（`tools: Read, Write, Glob, Grep`）。
+**突き合わせ役には Web ツールも Write も与えていない**（`tools: Read, Glob, Grep`）。
+レポート本文はテキストで返させ、本体が転記する（ハーネスが report の書き込みを拒否するため）。
 追加調査で穴を埋められると、1と2を照合する意味が消えるため。
 材料が足りなければ「情報なし」と書くのが正しい振る舞いになる。
 
@@ -305,10 +358,12 @@ Claude だけがファイル・git・gh・Web を触れる。他2者は REST の
    1呼び出しで $0.38〜0.50 になる
 
 **コストを抑えたいなら締めるべきはモデルの単価ではなく出力長である。**
-ただし `max_output_tokens` を下げて打ち切ると再実行になり、
+ただし `max_output_tokens` で削るのは筋が悪い。下げて打ち切ると再実行になり、
 **打ち切られた1回目の課金は `*.meta.json` に残らないまま消える**（Issue #10 の改稿で実際に起きた）。
-だから上限は 16,000 を下回らせない。出力を短くしたいなら `proposer.md` / `reviser.md` の
-語数指示を締めるか、`reasoning_effort` を下げる。
+逆に同期階層で上げると約30秒のプロキシ制限に当たって 502 になる（Issue #25）。
+**上限は「出力を短くする道具」ではなく、同期／非同期の制約である**（前述の表）。
+出力を短くしたいなら `proposer.md` / `reviser.md` の語数指示を締めるか、
+`reasoning_effort` を下げる。
 
 月4件 × 2ラウンド = 8ラウンドで **約 $11.5/月**。
 `docs/SETUP.md` が勧めている OpenAI の使用量上限 **月$10 はこの頻度だと先に当たる**。

@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        このIssueを作ると、次の定期実行（JST 09:00 / 15:00 / 21:00）でエージェントが着手します。
+        このIssueを作ると、次の定期実行（毎時）でエージェントが着手します。
         すぐ動かしたいときは routine の **Run now** を使ってください。
 
         進行は自動で付く `loop:*` ラベルと、Issue 上に1件だけ作られる「ループ状態」コメントで追えます。
@@ -21,7 +21,7 @@ body:
         - 技術調査 (research)
         - プログラム構築 (build)
         - アイデア深堀 (ideation)
-        - 合議 — 3つのLLMが案を出して相互評価する (deliberation)
+        - 合議 — 3つのLLMが案を出し、互いに敵対的レビューして結論を1つにまとめる (deliberation)
     validations:
       required: true
 
@@ -76,7 +76,7 @@ body:
       label: 最大反復回数
       description: |
         この回数のレビューを経ても受入基準を満たせなければ、自動で停止して人間に渡します。
-        Pro プランは 5 run/日 なので、大きくすると他のIssueの進行を圧迫します。
+        routines には日次実行上限があります（公称値は未確認。残り回数は claude.ai/code/routines）。大きくすると他のIssueの進行を圧迫します。
       options:
         - "3 — 軽い調査向け"
         - "5 — 既定"
