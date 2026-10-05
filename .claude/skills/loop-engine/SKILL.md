@@ -128,6 +128,12 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 その場合は同じフェーズをもう一度実行することになる。各フェーズは冪等に書かれているので、
 やり直して構わない（既にあるファイルは上書きされる）。
 
+**`state.phase` が `blocked` または `done` だったとき**（この手順書に対応する節が無い値）:
+古い状態、または人間が手で書き換えた状態である。**推測で再開しない。**
+`loop:needs-human` を付け、Issue に
+「`state.phase` が `<値>` で再開先が決まらない。どのフェーズから再開するかを指示してほしい」
+と書いて run を終える。`history` の最後の `kind` から類推してはならない。
+
 ### 状態が無い場合（ブートストラップ）
 
 1. `slug` を決める: `<4桁ゼロ埋めIssue番号>-<タイトルの英数字ケバブ>`。
@@ -193,8 +199,24 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
    渡すのは調査テーマ・受入基準・「公式に記述が無かった論点」・出力先パス。
    **段階1の結果そのものは渡さない**（公式の記述に引きずられ、独立した調査にならない）
 3. `research-reconcile` サブエージェントを起動し、2つの結果を突き合わせて
-   `report.md` を書かせる。このエージェントには Web を引く手段を与えていない。
-   突き合わせ役が追加調査で穴を埋めると、照合の意味が消えるため
+   **レポート本文をテキストで返させる。サブエージェントにファイルを書かせない。**
+   渡すのは `projects/<slug>/findings/official.md`・`projects/<slug>/findings/community.md`・
+   `projects/<slug>/plan.md` のパス。
+
+   > **ハーネスはサブエージェントによる report ファイルの書き込みを拒否する。**
+   > `Subagents should return findings as text, not write report files` というエラーになり、
+   > エージェント定義の `tools` に `Write` を書いても通らない。だから
+   > `research-reconcile` から `Write` を外し、テキストを返す契約に変えてある。
+   > 実測: Issue #13 と #19 がこれで2回止まった。出力先パスを渡しても解決しない。
+
+   **返ってきた本文を、あなたが `projects/<slug>/report.md` に一字一句変えずに保存する。**
+   これは代行ではなく転記である。**内容に手を入れてはならない** —
+   編集・要約・追記・節の並べ替え・表の作り直しをしない。
+   前置きや後書きが混じっていたらそこだけ落とし、本文は変えない。
+   `journal/NNN-work.md` に「突き合わせは `research-reconcile` が行い、本体は転記のみ」と書く。
+
+   突き合わせそのものを自分でやってはならない。このエージェントには Web を引く手段を
+   与えていない。突き合わせ役が追加調査で穴を埋めると、照合の意味が消えるため
 
 **サブエージェントが起動できない場合、自分で代行してはならない。**
 `loop:blocked` にして Issue に理由を書く。1人で公式と非公式を両方調べると、
@@ -252,10 +274,20 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
 | --- | --- | --- | --- |
 | `PASS` | `phase: done` | `loop:done` | PR に完了コメントを投稿する（draft 解除は不要。最初から通常PR） |
 | `REVISE` | `iteration` を +1 して `phase: work` | `loop:work` | — |
-| `BLOCKED` | `phase: blocked` | `loop:blocked` + `loop:needs-human` | 理由を Issue に書く |
+| `BLOCKED` | **`phase` は `work` のまま変えない** | `loop:blocked` + `loop:needs-human` | 理由を Issue に書く |
 
-`iteration` が `max_iterations` を超えたら、verdict が `REVISE` でも `phase: blocked` にし、
-`loop:needs-human` を付けて「上限 N 回に達した。現状の未達項目は…」と Issue に書く。
+`iteration` が `max_iterations` を超えたら、verdict が `REVISE` でも
+`loop:blocked` + `loop:needs-human` を付け、`phase` は `work` のまま残して
+「上限 N 回に達した。現状の未達項目は…」と Issue に書く。
+
+> **★ blocked はラベルで表す。`state.phase` に `blocked` を書かない。**
+> `state.phase` は「次の run がどこから再開するか」を表す値である。
+> ここに `blocked` を書くと、人間がラベルを外したあと**再開先が無くなる**。
+> この手順書に `### phase: blocked` の節は無いので、拾った run は手順書に無い判断を
+> 迫られる（絶対規則2に反する）。実測: Issue #13 が `phase: blocked` のまま残り、
+> ラベルを外しても段階3へ戻れない状態になった。
+> 止めるときは**ラベルだけ**を付け、`phase` は再開すべきフェーズに保つ。
+> これは synthesize の失敗時の扱い（`phase: synthesize` のまま変えない）と同じ原則である。
 
 ### レビュアーが呼べなかったとき
 
@@ -319,12 +351,17 @@ brief → propose → challenge → revise → synthesize → done
    > **提案の生成は数分かかる。** `openai:propose` は `background: true` で非同期化してあり、
    > `ask-llm.mjs` が内部でポーリングする。**Bash の `run_in_background: true` で実行すること。**
 
+   > **`--max-output-tokens` を 16000 より下げない。** `gpt-5.5` は `reasoning_effort: high` で
+   > 推論トークンも出力に数えるため、8000 では本文が出来上がる前に打ち切られる。
+   > 打ち切られると再実行することになり、**1回目の課金は `*.meta.json` にも残らないまま消える**
+   > （実測: Issue #10 で実際の出力は 10,705 / 15,612 トークン。初回 8000 で打ち切られ再実行した）。
+
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 8000 \
+     --input projects/<slug>/brief.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/_gemini.md
    node loop/bin/ask-llm.mjs --spec openai:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 8000 \
+     --input projects/<slug>/brief.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/_openai.md
    ```
 4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**（`min_proposers: 3`）。
@@ -379,10 +416,11 @@ brief → propose → challenge → revise → synthesize → done
 2. 呼ぶ。スキーマは**使わない**（改稿後の案を Markdown で返させる）:
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/reviser.md \
-     --input /tmp/revise-packet-gemini.md --max-output-tokens 8000 \
+     --input /tmp/revise-packet-gemini.md --max-output-tokens 16000 \
      --out projects/<slug>/proposals/<geminiのラベル>.v2.md
    ```
    OpenAI も同様（`run_in_background: true` で実行する）。
+   **propose と同じ理由で `--max-output-tokens` を 16000 より下げない。**
 3. Claude 自身も `reviser.md` に従って自案を改稿し `<claudeのラベル>.v2.md` に書く。
 4. 改稿が取得できなかった案は、**初稿をそのまま `.v2.md` にコピーする**。
    欠けたままにすると統合役の入力が揃わない。コピーした事実を `journal` に書く。
@@ -403,6 +441,20 @@ brief → propose → challenge → revise → synthesize → done
 
    **`.authors.json` のパスは渡さない。内容も伝えない。**
    「どれがあなたの案か」を示唆する発言もしない。
+
+   **`panel-synthesizer` が起動できない、または `answer.md` / `provenance.json` を
+   書き込めないとき:** **あなたが代行してはならない。**
+   `loop:blocked` と `loop:needs-human` を付け、Issue に「何が起きたか」と
+   「次に何をすればよいか」を書いて run を終える。
+   状態は `phase: synthesize` のまま変えない（解消後に同じフェーズから再開する）。
+
+   **黙って同じフェーズをやり直して終わってはならない。**
+   記録を残さずに終えると、失敗した run が毎時積み上がっていても誰も気づけない。
+
+   この規定は、レビュアーの失敗には5分岐の対応表があるのに統合役の失敗には手順が無い、
+   という非対称を埋めるためのものである。**まだ実際には起きていない失敗への備えであり、
+   実測に基づく記述ではない**（PR #15 は Issue #10 の滞留を根拠として挙げていたが、
+   これは誤読だった。#10 は次の run が正常に synthesize を完了させている）。
 
 2. **自案への偏りを機械的に確認する:**
    ```bash

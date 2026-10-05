@@ -119,6 +119,8 @@
 | `research-community` が何も見つけられなかった | 空の結果でも段階3に進む。レポートは全項目が `公式` か `情報なし` になる。それ自体が結果 |
 | `research-community` が起動できない（Agent ツールが使えない等） | **あなたが代行しない。** `loop:blocked` にして Issue に理由を書く。1人で両方調べると分離の意味が消える |
 | `research-reconcile` が起動できない | 同上。突き合わせを自分でやると、公式優先の規則が守られたかを誰も検証できない |
+| `research-reconcile` が `report.md` を書こうとして拒否される | **そういう設計にしてはいけない。** ハーネスがサブエージェントの report ファイル書き込みを拒否する（`Subagents should return findings as text, not write report files`）。本文をテキストで返させ、**本体が一字一句変えずに転記する**。転記は代行ではない。実測: Issue #13 と #19 がこれで2回止まった |
+| `research-community` が `findings/community.md` を書き込めない | こちらは実測で書き込めている（findings 系は拒否されない）。それでも拒否されたら、reconcile と同じようにテキストで返させて本体が転記する。**内容を自分で書き足さない** |
 
 ## 共通の規律
 

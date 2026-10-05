@@ -51,8 +51,8 @@ body:
         **合議 (deliberation) の場合はここが特に重要です。** Gemini と OpenAI は実行環境のファイルも
         Webも見られません。ここに書かれた内容が共有ブリーフの出発点になります。
       placeholder: |
-        - Claude は Pro プラン。routines は 5 run/日 が上限
-        - 追加の月額課金は数ドルまで
+        - Claude は Max プラン。routines の日次上限は claude.ai/code/routines で確認する
+        - 合議の追加課金は1ラウンド約 $1.44 まで
         - 既存のコードは loop/bin/ 配下にある
     validations:
       required: false
@@ -92,5 +92,5 @@ body:
       options:
         - label: このIssueの内容が、公開されても困らない私有リポジトリ上で処理されることを理解している
           required: true
-        - label: 合議 (deliberation) を選んだ場合、OpenAI と Gemini の有料APIが呼ばれる（1ラウンド約 USD 0.33）ことを理解している
+        - label: 合議 (deliberation) を選んだ場合、OpenAI と Gemini の有料APIが呼ばれる（1ラウンド約 USD 1.44 / うち95%が OpenAI。Issue #10 の実測）ことを理解している
           required: false

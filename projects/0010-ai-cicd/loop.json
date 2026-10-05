@@ -1,0 +1,54 @@
+{
+  "issue": 10,
+  "mode": "panel",
+  "usecase": "deliberation",
+  "phase": "done",
+  "iteration": 1,
+  "panel_round": 1,
+  "max_iterations": 5,
+  "slug": "0010-ai-cicd",
+  "branch": "claude/loop-10-ai-cicd",
+  "pr": 14,
+  "awaiting_human": false,
+  "artifacts": [
+    "answer.md",
+    "synthesis-check.json"
+  ],
+  "history": [
+    {
+      "n": 1,
+      "kind": "brief",
+      "by": "claude",
+      "at": "2026-10-04",
+      "cost_usd": 0.0009
+    },
+    {
+      "n": 2,
+      "kind": "propose",
+      "by": "claude",
+      "at": "2026-10-04",
+      "cost_usd": 0.5031
+    },
+    {
+      "n": 3,
+      "kind": "challenge",
+      "by": "claude+gemini+openai",
+      "at": "2026-10-04",
+      "cost_usd": 0.4071
+    },
+    {
+      "n": 4,
+      "kind": "revise",
+      "by": "claude+gemini+openai",
+      "at": "2026-10-04",
+      "cost_usd": 0.531
+    },
+    {
+      "n": 5,
+      "kind": "synthesize",
+      "by": "panel-synthesizer",
+      "at": "2026-10-04"
+    }
+  ],
+  "updated_at": "2026-10-04T14:05:17.067Z"
+}

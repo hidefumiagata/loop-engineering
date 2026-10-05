@@ -90,11 +90,11 @@ test('全フェーズのラベルが setup-labels.sh にある', () => {
   // ハードコードするとフェーズを増やしたときにずれるので、issue-state.mjs の定義から導出する。
   // syncPhase はこの集合のラベルを付け外しするため、定義が無いと GitHub 側で
   // 既定色のラベルが勝手に作られてしまう。
-  assert.ok(PHASE_LABELS.length >= 10, `PHASE_LABELS の抽出に失敗 (${PHASE_LABELS.length} 件)`);
+  assert.ok(PHASE_LABELS.length >= 9, `PHASE_LABELS の抽出に失敗 (${PHASE_LABELS.length} 件)`);
   for (const label of PHASE_LABELS) {
     assert.ok(LABELS_SH.includes(`${label}|`), `setup-labels.sh に ${label} が無い`);
   }
-  for (const ctl of ['loop|', 'loop:needs-human|', 'loop:go|', 'loop:stop|']) {
+  for (const ctl of ['loop|', 'loop:blocked|', 'loop:needs-human|', 'loop:go|', 'loop:stop|']) {
     assert.ok(LABELS_SH.includes(ctl), `setup-labels.sh に ${ctl.slice(0, -1)} が無い`);
   }
 });
@@ -169,7 +169,14 @@ test('技術調査のサブエージェントが定義され、権限が分離�
   const tools = reconcile.match(/^tools:\s*(.+)$/m)?.[1] ?? '';
   assert.doesNotMatch(tools, /WebSearch|WebFetch/,
     'research-reconcile に Web ツールを与えてはならない。突き合わせ役は追加調査をしない');
-  assert.match(tools, /Write/, 'report.md を書くので Write は要る');
+  // ハーネスがサブエージェントの report ファイル書き込みを拒否する
+  // （Subagents should return findings as text, not write report files）。
+  // Write を持たせても必ず失敗するので、テキストを返す契約にしてある。
+  // 実測: Issue #13 と #19 がこれで2回止まった。
+  assert.doesNotMatch(tools, /Write/,
+    'research-reconcile に Write を与えてはならない。ハーネスが report の書き込みを拒否する');
+  assert.match(reconcile, /テキストで返す/,
+    'レポート本文をテキストで返す契約が書かれていない');
 
   // 公式優先の3規則が書かれていること
   assert.match(reconcile, /公式（非公式と相違）/, '相違時は公式を採りつつ備考に残す');
@@ -397,4 +404,93 @@ test('上限の既定値が入っている', () => {
   assert.ok(config.defaults.max_panel_rounds >= 1);
   assert.equal(config.defaults.branch_prefix, 'claude/loop-',
     'Claude Cloud は claude/ 接頭辞のブランチのみ常に push を許す');
+});
+
+test('サブエージェントの起動手順に出力先パスの指示がある', () => {
+  // 実測: Issue #13 は research-reconcile が report.md を書けずに blocked になった。
+  // 原因は手順書が出力先パスを渡していなかったこと。エージェント定義側は
+  // 「保存先のパスは呼び出し元から渡されます」と書かれているので、
+  // 渡し忘れても設定エラーにはならず、run が落ちる形で初めて分かる。
+  for (const agent of ['research-community', 'research-reconcile', 'panel-synthesizer']) {
+    const at = SKILL.indexOf(agent);
+    assert.ok(at > 0, `${agent} が SKILL.md に出てこない`);
+    assert.match(SKILL.slice(at, at + 900), /出力先/,
+      `${agent} の起動手順に出力先パスを渡す指示がない。渡さないと書き込みに失敗する`);
+  }
+
+  // エージェント定義が呼び出し元にパスを委ねているなら、手順書側がそれを渡していること
+  const reconcile = read('.claude/agents/research-reconcile.md');
+  if (/パスは呼び出し元から渡され/.test(reconcile)) {
+    assert.match(SKILL, /出力先パス `projects\/<slug>\/report\.md`/,
+      'research-reconcile は呼び出し元からパスを受け取る前提なので、SKILL.md が明示的に渡すこと');
+  }
+});
+
+test('サブエージェントが失敗した run は記録を残して終わる', () => {
+  // レビュアーの失敗には5分岐の対応表があるのに、統合役の失敗には手順が無かった。
+  // 失敗を記録せずに終えると、毎時の run が黙って積み上がっても誰も気づけない。
+  // これは実測ではなく、非対称を埋めるための予防的な規定である。
+  const from = SKILL.indexOf('### phase: synthesize');
+  assert.ok(from > 0, 'synthesize のフェーズ節が無い');
+  const section = SKILL.slice(from, SKILL.indexOf('### phase:', from + 10) + 1 || undefined);
+  assert.match(section, /loop:blocked/,
+    'synthesize に失敗したときの blocked 手順が無い');
+  assert.match(section, /loop:needs-human/,
+    'synthesize に失敗したときの needs-human 手順が無い');
+  assert.match(SKILL, /黙って同じフェーズをやり直して終わってはならない/,
+    '黙って再試行して終わることを禁じる文言が無い');
+});
+
+test('長文を生成する階層の出力上限が打ち切られない値になっている', () => {
+  // 実測: Issue #10 で gpt-5.5 の出力は 10,705 / 15,612 トークンだった。
+  // 8000 では打ち切られて再実行になり、1回目の課金は meta.json にも残らず消える。
+  const limits = [...SKILL.matchAll(/--max-output-tokens (\d+)/g)].map((m) => Number(m[1]));
+  assert.ok(limits.length >= 3, '--max-output-tokens の指定が見つからない');
+  for (const n of limits) {
+    assert.ok(n >= 16000,
+      `--max-output-tokens ${n} は低すぎる。reasoning_effort: high は推論トークンも出力に数える`);
+  }
+});
+
+test('突き合わせ役はテキストを返し、本体は転記するだけという契約が手順書にある', () => {
+  // ハーネスがサブエージェントの report ファイル書き込みを拒否するため
+  // （Subagents should return findings as text, not write report files）、
+  // 「サブエージェントが書く」設計は成立しない。実測で Issue #13 と #19 が2回止まった。
+  // 代わりに本体が転記するが、転記と代行の線引きを文章で縛る必要がある。
+  assert.match(SKILL, /サブエージェントにファイルを書かせない/,
+    'サブエージェントに書かせない明示が無い');
+  assert.match(SKILL, /一字一句変えずに保存する/,
+    '本体が転記するだけである明示が無い');
+  assert.match(SKILL, /編集・要約・追記/,
+    '転記時に内容へ手を入れない明示が無い');
+  assert.match(SKILL, /突き合わせそのものを自分でやってはならない/,
+    '転記は許すが代行は禁じる、という線引きが無い');
+
+  // 用途別指示にも同じ線引きがあること
+  const research = read('loop/prompts/usecases/research.md');
+  assert.match(research, /Subagents should return findings as text/,
+    'research.md に実際のエラー文が残っていない。次に同じ症状を見たとき照合できない');
+  assert.match(research, /転記は代行ではない/,
+    'research.md に転記と代行の線引きが無い');
+});
+
+test('blocked はラベルで表し、state.phase には書かない', () => {
+  // state.phase は「次の run がどこから再開するか」を表す値。blocked を書くと、
+  // 人間がラベルを外したあと再開先が無くなる。この手順書に ### phase: blocked の節は
+  // 無いので、拾った run は手順書に無い判断を迫られる（絶対規則2に反する）。
+  // 実測: Issue #13 が phase: blocked のまま残り、ラベルを外しても段階3へ戻れなかった。
+  assert.match(SKILL, /`state\.phase` に `blocked` を書かない/,
+    'phase に blocked を書かせない明示が無い');
+
+  // 手順書が節を持たないフェーズを state.phase に使っていないこと
+  const sections = [...SKILL.matchAll(/^### phase: ([a-z]+)/gm)].map((m) => m[1]);
+  assert.ok(sections.length >= 8, `phase 節の抽出に失敗 (${sections.length} 件)`);
+  for (const p of ['blocked', 'done']) {
+    assert.ok(!sections.includes(p),
+      `### phase: ${p} の節が増えている。増やすならこのテストの前提を見直すこと`);
+  }
+
+  // 節が無い値を拾ったときの扱いが書かれていること
+  assert.match(SKILL, /推測で再開しない/,
+    'state.phase に未対応の値が入っていたときの扱いが書かれていない');
 });
