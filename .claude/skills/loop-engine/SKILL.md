@@ -370,17 +370,24 @@ brief → propose → challenge → revise → synthesize → done
    > **提案の生成は数分かかる。** `openai:propose` は `background: true` で非同期化してあり、
    > `ask-llm.mjs` が内部でポーリングする。**Bash の `run_in_background: true` で実行すること。**
 
-   > **`--max-output-tokens` を 16000 より下げない。** `gpt-5.5` は `reasoning_effort: high` で
-   > 推論トークンも出力に数えるため、8000 では本文が出来上がる前に打ち切られる。
-   > 打ち切られると再実行することになり、**1回目の課金は `*.meta.json` にも残らないまま消える**
-   > （実測: Issue #10 で実際の出力は 10,705 / 15,612 トークン。初回 8000 で打ち切られ再実行した）。
+   > **`--max-output-tokens` を自分で渡さない。** 出力上限は階層ごとの制約なので
+   > `loop/config.json` の `tiers.*.max_output_tokens` に持たせてある。`ask-llm.mjs` がそこから読む。
+   >
+   > | 階層 | 上限 | 理由 |
+   > | --- | --- | --- |
+   > | `openai:propose` | 16000 | `background: true` で**非同期**。8000 では `gpt-5.5` が打ち切られた（実測: Issue #10、出力 10,705 / 15,612 トークン） |
+   > | `gemini:propose` | 8000 | Gemini に background は無く**同期**。プロキシの約30秒制限内に返しきる必要がある（実測: 16000 にしたら 502 で合議が止まった — Issue #25） |
+   >
+   > **同期の階層で上限を上げてはならない。** 生成が30秒を超えて 502 になり、propose で止まる。
+   > 逆に非同期の階層で下げると打ち切られ、**再実行した1回目の課金は `*.meta.json` にも残らず消える。**
+   > どちらに振っても事故になるので、数字は散文ではなく config の1か所で管理する。
 
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 16000 \
+     --input projects/<slug>/brief.md \
      --out projects/<slug>/proposals/_gemini.md
    node loop/bin/ask-llm.mjs --spec openai:propose --system loop/prompts/roles/proposer.md \
-     --input projects/<slug>/brief.md --max-output-tokens 16000 \
+     --input projects/<slug>/brief.md \
      --out projects/<slug>/proposals/_openai.md
    ```
 4. **3案揃わなければ `loop:blocked` にして終える。2案で続行してはならない**（`min_proposers: 3`）。
@@ -435,11 +442,11 @@ brief → propose → challenge → revise → synthesize → done
 2. 呼ぶ。スキーマは**使わない**（改稿後の案を Markdown で返させる）:
    ```bash
    node loop/bin/ask-llm.mjs --spec gemini:propose --system loop/prompts/roles/reviser.md \
-     --input /tmp/revise-packet-gemini.md --max-output-tokens 16000 \
+     --input /tmp/revise-packet-gemini.md \
      --out projects/<slug>/proposals/<geminiのラベル>.v2.md
    ```
    OpenAI も同様（`run_in_background: true` で実行する）。
-   **propose と同じ理由で `--max-output-tokens` を 16000 より下げない。**
+   **propose と同じく `--max-output-tokens` は渡さない。** config の階層設定が正である。
 3. Claude 自身も `reviser.md` に従って自案を改稿し `<claudeのラベル>.v2.md` に書く。
 4. 改稿が取得できなかった案は、**初稿をそのまま `.v2.md` にコピーする**。
    欠けたままにすると統合役の入力が揃わない。コピーした事実を `journal` に書く。

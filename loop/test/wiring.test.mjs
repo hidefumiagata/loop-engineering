@@ -470,17 +470,6 @@ test('サブエージェントが失敗した run は記録を残して終わる
     '黙って再試行して終わることを禁じる文言が無い');
 });
 
-test('長文を生成する階層の出力上限が打ち切られない値になっている', () => {
-  // 実測: Issue #10 で gpt-5.5 の出力は 10,705 / 15,612 トークンだった。
-  // 8000 では打ち切られて再実行になり、1回目の課金は meta.json にも残らず消える。
-  const limits = [...SKILL.matchAll(/--max-output-tokens (\d+)/g)].map((m) => Number(m[1]));
-  assert.ok(limits.length >= 3, '--max-output-tokens の指定が見つからない');
-  for (const n of limits) {
-    assert.ok(n >= 16000,
-      `--max-output-tokens ${n} は低すぎる。reasoning_effort: high は推論トークンも出力に数える`);
-  }
-});
-
 test('突き合わせ役はテキストを返し、本体は転記するだけという契約が手順書にある', () => {
   // ハーネスがサブエージェントの report ファイル書き込みを拒否するため
   // （Subagents should return findings as text, not write report files）、
@@ -522,4 +511,38 @@ test('blocked はラベルで表し、state.phase には書かない', () => {
   // 節が無い値を拾ったときの扱いが書かれていること
   assert.match(SKILL, /推測で再開しない/,
     'state.phase に未対応の値が入っていたときの扱いが書かれていない');
+});
+
+test('出力上限が同期/非同期の制約と整合している', () => {
+  // エージェントプロキシは1リクエスト約30秒で諦めて 502 を返す（実測）。
+  //   - 同期呼び出し（background 無し）は30秒内に返しきる必要があり、上限を上げられない。
+  //     実測: gemini:propose を 16000 にしたら 502 で合議が propose から進めなくなった（Issue #25）。
+  //   - 非同期（background: true）はポーリングで取るので上限を上げてよい。
+  //     実測: openai:propose を 8000 にすると gpt-5.5 が打ち切られる（Issue #10）。
+  // この非対称を散文で管理すると必ずずれるので、config を正にして機械で縛る。
+  const SYNC_CAP = 8000;
+  for (const [pname, provider] of Object.entries(config.providers)) {
+    for (const [tname, tier] of Object.entries(provider.tiers)) {
+      const cap = tier.max_output_tokens;
+      assert.ok(Number.isInteger(cap) && cap > 0,
+        `${pname}:${tname} に max_output_tokens が無い。呼び出し側が数字を書くと散文とずれる`);
+      if (tier.background === true) continue;
+      assert.ok(cap <= SYNC_CAP,
+        `${pname}:${tname} は同期呼び出し（background 無し）なのに max_output_tokens=${cap}。`
+        + ` 約30秒のプロキシ制限を超えて 502 になる。${SYNC_CAP} 以下にするか background: true にすること`);
+    }
+  }
+});
+
+test('手順書が出力上限を自分で渡していない', () => {
+  // 上限は階層ごとの制約。散文に数字を書くと config と二重管理になり、
+  // 同期階層に非同期向けの値が付いて 502 になる（実測: Issue #25）。
+  assert.doesNotMatch(SKILL, /--max-output-tokens \d/,
+    '手順書が --max-output-tokens に数値を渡している。config の tiers.*.max_output_tokens が正');
+  assert.match(SKILL, /`--max-output-tokens` を自分で渡さない/,
+    '渡さない方針を手順書に残す');
+  // ask-llm.mjs 側が config から読んでいること
+  const src = read('loop/bin/ask-llm.mjs');
+  assert.match(src, /tier\.max_output_tokens/,
+    'ask-llm.mjs が tier.max_output_tokens を読んでいない');
 });

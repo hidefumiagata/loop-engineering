@@ -329,13 +329,18 @@ export function diagnose(res, bodyText, provider, authMode) {
 }
 
 export async function askLLM({
-  spec, system, input, schema = null, maxOutputTokens = 16000, maxWaitSec = 420,
+  spec, system, input, schema = null, maxOutputTokens = null, maxWaitSec = 420,
   config = loadConfig(), log = (m) => process.stderr.write(m + '\n'),
 }) {
   if (schema && !SCHEMA_NAMES.includes(schema)) {
     throw new Error(`未知のスキーマ: ${schema} (有効: ${SCHEMA_NAMES.join(', ')})`);
   }
   const { providerName, tierName, provider, tier } = resolveTier(spec, config);
+  // ★ 出力上限は階層ごとの制約なので config に持たせる。呼び出し側が数字を書かない。
+  //   同期呼び出し（background 無し）はエージェントプロキシの約30秒制限内に返しきる必要があり、
+  //   上限を上げると 502 になる。非同期（background: true）は上げてよい。
+  //   この非対称を散文で管理すると必ずずれるので、tier.max_output_tokens を正とする。
+  maxOutputTokens = maxOutputTokens ?? tier.max_output_tokens ?? 8000;
   const { url, body } = buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens });
   const { headers, mode } = authHeaders(provider);
 
@@ -447,6 +452,9 @@ const USAGE = [
   '      [--system <file>] --input <file> [--schema <' + SCHEMA_NAMES.join('|') + '>] \\',
   '      [--max-output-tokens <n>] --out <file>',
   '',
+  '  --max-output-tokens は通常渡さない。既定は config の tiers.*.max_output_tokens。',
+  '  同期階層（background 無し）で上げるとプロキシの約30秒制限に当たって 502 になる。',
+  '',
   '  --provider/--tier の代わりに --spec gemini:review と書いてもよい。',
   '  --schema を省くとプレーンテキスト（提案文など）として扱う。',
   '  --out に書くと同じ場所に <out>.meta.json（モデル・トークン・コスト）も出力する。',
@@ -465,7 +473,9 @@ async function main() {
   const system = args.system ? readFileSync(args.system, 'utf8') : 'あなたは厳密で簡潔なアシスタントです。';
   const input = readFileSync(args.input, 'utf8');
   const schema = typeof args.schema === 'string' ? args.schema : null;
-  const maxOutputTokens = args.max_output_tokens ? Number(args.max_output_tokens) : 16000;
+  // 既定は config の tier.max_output_tokens（askLLM が解決する）。
+  // --max-output-tokens は一時的な上書き用で、通常は渡さない。
+  const maxOutputTokens = args.max_output_tokens ? Number(args.max_output_tokens) : null;
   const maxWaitSec = args.max_wait ? Number(args.max_wait) : 420;
 
   const r = await askLLM({ spec, system, input, schema, maxOutputTokens, maxWaitSec });

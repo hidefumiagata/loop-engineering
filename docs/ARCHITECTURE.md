@@ -35,7 +35,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 | 入力 | GitHub Issue（`loop` ラベル） | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **自動でマージする** |
+| PR | 人間がマージする | **人間がマージする** |
 | 許可ツール | + `Agent`（調査のサブエージェント） | Web と git だけ |
 
 **分けた理由**: 定期ジョブには「目的を達成したか」という判定が無い。
@@ -46,17 +46,33 @@ Claude Cloud Routine "loop-engine" ───────────────
 定期ジョブは Issue を**作らない・触らない・コメントしない**。
 PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue を閉じてしまうため）。
 
-### 自動マージの実装
+### マージを自動化しない理由
 
-`gh pr merge` は GraphQL なのでクラウドから使えない。REST を使う。
+当初 daily-jobs は PR を自動マージする設計だった。**成立しないので外した。**
 
-```
-PUT /repos/{owner}/{repo}/pulls/{n}/merge   merge_method: squash
-```
+| 試した経路 | 結果 |
+| --- | --- |
+| REST `PUT /pulls/{n}/merge` をセッションから叩く | **ハーネスが拒否。** Claude Code の auto-mode 権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める。実測で2日連続失敗（PR #17 / #27）。**成功したことは一度も無い** |
+| `permissions.allow` で許可する | 拒否理由が「レビューが無い」であり、ツールの許可不足ではないので効かない |
+| GitHub 側の auto-merge（`allow_auto_merge`） | 前提のブランチ保護と必須チェックを有効化できない。private かつ無料プランのため `GET /branches/main/protection` が 403 `Upgrade to GitHub Pro` |
 
-**作成直後は失敗しうる。** GitHub がマージ可否を計算するまで数秒かかり、
-その間は 405 が返る。5秒間隔で最大3回まで再試行し、
-それでも駄目なら**マージを諦めて PR を残す**。成果物は PR にあるので失われない。
+だから**マージは人間が行う**。loop-engine 側の「マージはしない。人間に委ねる」と揃い、
+リポジトリ全体で一貫した。再試行を手順に書かないことも明示している
+（拒否されるものを叩いても結果は変わらず、run とトークン枠を無駄にするだけである）。
+
+### 出力上限は階層ごとの制約として config に持つ
+
+プロキシの約30秒制限（下表）に対し、上限の正解は**同期か非同期かで逆を向く**。
+
+| 階層 | `background` | `max_output_tokens` | 理由 |
+| --- | --- | --- | --- |
+| `openai:propose` | `true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
+| `gemini:propose` | なし | 8000 | 同期。30秒内に返しきる必要がある。16000 にしたら 502 で合議が propose から進めなくなった（Issue #25） |
+
+この非対称を手順書の散文で管理すると必ずずれる。実際に一度ずれて Issue #25 を止めた。
+だから数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、
+`ask-llm.mjs` がそこから読む。手順書は `--max-output-tokens` を渡さない。
+wiring テストが「`background` の無い階層は 8000 以下」を強制する。
 
 ## なぜ GitHub Actions ではないのか
 
@@ -80,7 +96,7 @@ PUT /repos/{owner}/{repo}/pulls/{n}/merge   merge_method: squash
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
-| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ち、Gemini Flash は成功した | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
+| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ちた。Gemini Flash は当初成功していたが、出力上限を 8000→16000 に上げた途端 502 になった（Issue #25）。**モデルではなく生成の長さが効く** | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
 | **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを無視する**（`NODE_USE_ENV_PROXY` は Node 24 以降、サンドボックスは Node 22） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
 | **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
 | **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |
