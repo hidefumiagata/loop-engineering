@@ -1,4 +1,33 @@
-{"issue":25,"mode":"panel","usecase":"deliberation","slug":"0025-sre-strategy","branch":"claude/loop-25-sre-strategy","phase":"propose","iteration":1,"panel_round":1,"max_iterations":5,"pr":null,"awaiting_human":false,
-"artifacts":["brief.md"],
-"history":[{"n":1,"kind":"brief","by":"claude+gemini:review","at":"2026-10-05","cost_usd":0.0010}],
-"updated_at":"2026-10-05T16:00:00Z"}
+{
+  "issue": 25,
+  "mode": "panel",
+  "usecase": "deliberation",
+  "slug": "0025-sre-strategy",
+  "branch": "claude/loop-25-sre-strategy",
+  "phase": "propose",
+  "iteration": 1,
+  "panel_round": 1,
+  "max_iterations": 5,
+  "pr": null,
+  "awaiting_human": true,
+  "artifacts": [
+    "brief.md"
+  ],
+  "history": [
+    {
+      "n": 1,
+      "kind": "brief",
+      "by": "claude+gemini:review",
+      "at": "2026-10-05",
+      "cost_usd": 0.001
+    },
+    {
+      "n": 2,
+      "kind": "propose(blocked: gemini 502)",
+      "by": "claude+openai:propose",
+      "at": "2026-10-05",
+      "cost_usd": 0.3372
+    }
+  ],
+  "updated_at": "2026-10-05T16:02:46.467Z"
+}
