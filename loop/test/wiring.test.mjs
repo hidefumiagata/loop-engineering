@@ -241,18 +241,41 @@ test('どちらのモードも最後は PR を作って人間に委ねる', () =
   assert.match(skill, /マージはしない/, 'エージェントにマージさせない');
 });
 
-test('PR 本文が Issue を自動クローズする', () => {
-  // Closes が無いと、完了した Issue が open のまま残る。
-  // loop ラベルが付いたままなので、ラベル構成によっては次の run が拾い直してしまう。
+test('Issue のクローズを GitHub の自動クローズに依存していない', () => {
+  // 実測: PR #3 / #8 / #11 / #12 / #14 / #22 はすべて base=main・merged=true・
+  // 本文に Closes #N ありだったが、Issue #2 / #6 / #7 / #9 / #19 は1件も自動で閉じず、
+  // 毎回人間が手で閉じていた（closed イベントの commit_id が空）。
+  // さらに listCandidates は loop:done を除外するので、done にした run 自身は
+  // 後から行われるマージを見られない。だから run の先頭で掃除する必要がある。
   const bodies = [...SKILL.matchAll(/"body":\s*"([^"]*(?:\\.[^"]*)*)"/g)].map((m) => m[1]);
   const prBodies = bodies.filter((b) => b.includes('projects/<slug>/'));
   assert.ok(prBodies.length >= 2,
     `PR 本文テンプレートが ${prBodies.length} 件しか見つからない。pipeline と panel の両方に必要`);
+  // Closes は人間が PR から Issue を辿るために残す（クローズの手段としては当てにしない）
   for (const b of prBodies) {
     assert.match(b, /Closes #<issue>/,
       `PR 本文に Closes #<issue> が無い: ${b.slice(0, 70)}…`);
   }
-  assert.match(SKILL, /マージ時に Issue が自動でクローズされる/, '理由を手順書に残す');
+
+  // 確実に閉じるのは reconcile-merged。Step 0 で毎 run 実行されること
+  assert.match(SKILL, /issue-state\.mjs reconcile-merged/,
+    'Step 0 で reconcile-merged を実行していない。完了した Issue が永久に open のまま残る');
+  assert.match(SKILL, /毎 run の先頭で必ず実行する/,
+    'reconcile-merged を毎 run 実行する明示が無い');
+  assert.match(SKILL, /自動クローズは当てにならない/,
+    '自動クローズに依存しない理由を手順書に残す');
+
+  // プレースホルダのまま書かせない
+  assert.match(SKILL, /実際の番号に置き換える/,
+    'Closes #<issue> を実番号に置き換える指示が無い');
+
+  // PR 番号を状態に入れないと reconcile-merged がマージを確認できない
+  assert.match(SKILL, /`reconcile-merged` が\s*\n?\s*マージを確認できず/,
+    'PR 番号を状態に入れる理由（reconcile-merged の前提）が書かれていない');
+
+  // クローズの起点がマージであること（done ラベルを条件にすると早期マージ分が閉じない）
+  assert.match(SKILL, /起点は `loop:done` ではなくマージである/,
+    'クローズの起点がマージであることが書かれていない');
 });
 
 test('状態コメントが成果物へのリンクを持つ', () => {

@@ -331,6 +331,90 @@ export function postComment(issue, body, repo = repoSlug()) {
   return { id: created.id, url: created.html_url };
 }
 
+// ---------------- 完了した Issue を閉じる ----------------
+//
+// ★ GitHub の自動クローズ（PR 本文の `Closes #N`）に依存してはならない。
+//   実測: このリポジトリで PR #3 / #8 / #11 / #12 / #14 / #22 はすべて
+//   base=main・merged=true・本文に `Closes #N` ありだったが、Issue #2 / #6 / #7 / #9 / #19 は
+//   1件も自動で閉じず、毎回人間が手で閉じていた（closed イベントの commit_id が空）。
+//   理由は GitHub 側の挙動なのでサンドボックスからは検証できない。だから依存をやめ、
+//   「PR がマージされたら REST で明示的に閉じる」形にする。
+//   `Closes #N` は残すが、あれば二重に効くだけで害は無い（この処理は冪等）。
+//
+// なぜ run の先頭で掃除するのか:
+//   listCandidates は loop:done を除外するため、完了した Issue はもう拾われない。
+//   つまり「done にした run」自身は PR のマージを見られない（マージは後で人間がやる）。
+//   見に行ける run が他に無いので、各 run の先頭で未クローズの done を掃除する。
+
+/**
+ * Issue を閉じてよいかを決める。純関数。ネットワークを見ない。
+ *
+ * 起点は **PR がマージされたこと**であって `loop:done` ではない。
+ * マージは人間の操作であり、成果物を受理したという意思表示そのものだからである。
+ * `loop:done` を条件にすると、人間が review の途中で先にマージした Issue が閉じない。
+ * 実測: Issue #19 は `loop:review` のまま PR #22 がマージされ、人間が手で閉じていた。
+ *
+ * @param {{labels: string[], state: object|null, pr: {merged: boolean}|null}} input
+ * @returns {{close: boolean, reason: string, addDone?: boolean}}
+ */
+export function decideClose({ labels, state, pr }) {
+  if (!labels.includes('loop')) return { close: false, reason: 'loop ラベルが無い' };
+  // 緊急停止中は何もしない。人間が状況を確認している最中かもしれない
+  if (labels.includes('loop:stop')) return { close: false, reason: 'loop:stop が付いている' };
+  const num = state?.pr;
+  if (typeof num !== 'number') return { close: false, reason: '状態に PR 番号が無い' };
+  if (!pr) return { close: false, reason: `PR #${num} が取得できない` };
+  if (!pr.merged) return { close: false, reason: `PR #${num} が未マージ` };
+  return {
+    close: true,
+    reason: `PR #${num} がマージ済み`,
+    // 途中のフェーズで受理された場合、ラベルを done に揃えて以降拾われないようにする
+    addDone: !labels.includes('loop:done'),
+  };
+}
+
+/** Issue を閉じる（REST。gh issue close は GraphQL なので使えない） */
+export function closeIssue(issue, repo = repoSlug()) {
+  if (DRY) { process.stderr.write(`[dry-run] issue #${issue} をクローズ\n`); return { closed: false, dryRun: true }; }
+  gh(['api', '-X', 'PATCH', `repos/${repo}/issues/${issue}`, '--input', '-'],
+    { input: JSON.stringify({ state: 'closed', state_reason: 'completed' }) });
+  return { closed: true };
+}
+
+/**
+ * open な `loop` Issue のうち、PR がマージ済みのものを閉じる。
+ * 冪等。閉じるものが無ければ何もしない。
+ *
+ * open な loop Issue は常に数件なので、1件ずつ PR を見ても REST 呼び出しは数回で済む。
+ */
+export function reconcileMerged(repo = repoSlug()) {
+  const raw = ghJsonLines([
+    'api', '--paginate',
+    `repos/${repo}/issues?labels=loop&state=open&per_page=100`,
+    '--jq', '[.[] | {number, labels: [.labels[].name], is_pr: has("pull_request")}]',
+  ]);
+  const results = [];
+  for (const i of raw.filter((x) => !x.is_pr)) {
+    const st = readState(i.number, repo);
+    const num = st?.state?.pr;
+    let pr = null;
+    if (typeof num === 'number') {
+      // マージ済み判定だけが欲しい。取得できなければ閉じない（次の run で再試行する）
+      const body = gh(['api', `repos/${repo}/pulls/${num}`, '--jq', '{merged}'],
+        { tolerate: /HTTP 404/i });
+      if (body) { try { pr = JSON.parse(body); } catch { pr = null; } }
+    }
+    const d = decideClose({ labels: i.labels, state: st?.state ?? null, pr });
+    if (d.close) {
+      // 先に done ラベルへ揃える。閉じたあとに失敗すると、次の run が拾い直してしまう
+      if (d.addDone) syncPhase(i.number, 'done', repo);
+      closeIssue(i.number, repo);
+    }
+    results.push({ issue: i.number, ...d });
+  }
+  return results;
+}
+
 // ---------------- CLI ----------------
 
 const USAGE = [
@@ -342,6 +426,7 @@ const USAGE = [
   '  node loop/bin/issue-state.mjs comment <issue> <file.md> 人間可読コメントを投稿',
   '  node loop/bin/issue-state.mjs sync-phase <issue> <phase> フェーズラベルを1つに揃える',
   '  node loop/bin/issue-state.mjs labels <issue> add|remove <名前...>',
+  '  node loop/bin/issue-state.mjs reconcile-merged          PR がマージ済みの Issue を閉じる',
   '',
   '  すべて REST (gh api) で動く。クラウドセッションでは GitHub GraphQL が 403 になるため、',
   '  --json 系サブコマンド（issue list / issue edit / issue comment / pr create 等）は使えない。',
@@ -397,6 +482,15 @@ function main() {
       else if (a2 === 'remove') removeLabels(Number(a1), rest);
       else throw new Error(`labels の操作は add か remove です (received: ${a2})`);
       process.stderr.write(`[ok] issue #${a1} のラベルを ${a2}: ${rest.join(', ')}\n`);
+      break;
+    }
+    case 'reconcile-merged': {
+      const r = reconcileMerged();
+      console.log(JSON.stringify(r, null, 2));
+      const closed = r.filter((x) => x.close);
+      process.stderr.write(closed.length
+        ? `[ok] ${closed.length} 件をクローズ: ${closed.map((x) => `#${x.issue}`).join(', ')}\n`
+        : `[ok] クローズ対象なし（open な loop Issue ${r.length} 件を確認）\n`);
       break;
     }
     default:

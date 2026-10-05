@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER, PHASE_LABELS, BLOCKED_LABEL } from '../bin/issue-state.mjs';
+import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER, PHASE_LABELS, BLOCKED_LABEL, decideClose } from '../bin/issue-state.mjs';
 
 const pipelineState = {
   issue: 12,
@@ -144,4 +144,67 @@ test('sync-phase は loop:blocked を勝手に外さない', () => {
     'brief', 'propose', 'challenge', 'revise', 'synthesize']) {
     assert.ok(PHASE_LABELS.includes(`loop:${p}`), `loop:${p} が PHASE_LABELS に無い`);
   }
+});
+
+// ---- 完了した Issue を確実に閉じる（decideClose は純関数） ----
+//
+// GitHub の自動クローズは実測で一度も効いていない。PR #3/#8/#11/#12/#14/#22 はすべて
+// base=main・merged=true・本文に Closes #N ありだったが、Issue #2/#6/#7/#9/#19 は
+// 1件も自動で閉じず毎回人間が手で閉じていた（closed イベントの commit_id が空）。
+
+const DONE = ['loop', 'loop:done'];
+
+test('PR がマージ済みなら閉じる', () => {
+  const d = decideClose({ labels: DONE, state: { pr: 22 }, pr: { merged: true } });
+  assert.equal(d.close, true);
+  assert.match(d.reason, /#22/);
+});
+
+test('PR が未マージなら閉じない（マージは人間の操作で、それが確定の合図）', () => {
+  const d = decideClose({ labels: DONE, state: { pr: 22 }, pr: { merged: false } });
+  assert.equal(d.close, false);
+  assert.match(d.reason, /未マージ/);
+});
+
+test('loop:done が無くても、PR がマージ済みなら閉じる', () => {
+  // 起点は done ラベルではなくマージ。マージは人間が成果物を受理した意思表示である。
+  // done を条件にすると、人間が review の途中で先にマージした Issue が閉じない。
+  // 実測: Issue #19 は loop:review のまま PR #22 がマージされ、人間が手で閉じていた。
+  const d = decideClose({ labels: ['loop', 'loop:review'], state: { pr: 22 }, pr: { merged: true } });
+  assert.equal(d.close, true);
+  assert.equal(d.addDone, true, 'done ラベルへ揃える必要がある（以降拾われないように）');
+});
+
+test('すでに loop:done なら done ラベルを足し直さない', () => {
+  const d = decideClose({ labels: DONE, state: { pr: 22 }, pr: { merged: true } });
+  assert.equal(d.close, true);
+  assert.equal(d.addDone, false);
+});
+
+test('loop ラベルが無い Issue は触らない', () => {
+  // 不変条件: loop ラベルが付いていない Issue を触らない
+  const d = decideClose({ labels: ['loop:done'], state: { pr: 1 }, pr: { merged: true } });
+  assert.equal(d.close, false);
+  assert.match(d.reason, /loop ラベル/);
+});
+
+test('loop:stop が付いていたら閉じない', () => {
+  // 緊急停止中は人間が状況を見ている最中かもしれない
+  const d = decideClose({ labels: [...DONE, 'loop:stop'], state: { pr: 1 }, pr: { merged: true } });
+  assert.equal(d.close, false);
+  assert.match(d.reason, /loop:stop/);
+});
+
+test('状態に PR 番号が無ければ閉じない', () => {
+  for (const state of [null, {}, { pr: null }, { pr: '22' }]) {
+    const d = decideClose({ labels: DONE, state, pr: { merged: true } });
+    assert.equal(d.close, false, `state=${JSON.stringify(state)} で閉じてしまった`);
+    assert.match(d.reason, /PR 番号/);
+  }
+});
+
+test('PR が取得できなければ閉じない（次の run で再試行する）', () => {
+  const d = decideClose({ labels: DONE, state: { pr: 99 }, pr: null });
+  assert.equal(d.close, false);
+  assert.match(d.reason, /取得できない/);
 });

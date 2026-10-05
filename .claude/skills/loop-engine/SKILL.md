@@ -62,8 +62,28 @@ MCP で回避すると「スクリプトでは再現できない手順」にな�
 
 ```bash
 cat loop/config.json                                  # preset / providers / usecases を把握する
+node loop/bin/issue-state.mjs reconcile-merged        # マージ済み Issue を閉じる（下記）
 node loop/bin/issue-state.mjs list                    # 対象 Issue を古い順に取得
 ```
+
+**`reconcile-merged` を毎 run の先頭で必ず実行する。** open な `loop` Issue のうち、
+状態の `pr` が**マージ済み**のものを REST で閉じる。冪等で、対象が無ければ何もしない。
+これは作業ではなく後片付けなので、`issues_per_run` の数には数えない。
+
+**起点は `loop:done` ではなくマージである。** マージは人間が成果物を受理した意思表示なので、
+それだけを条件にする。done ラベルを条件にすると、人間が review の途中で先にマージした Issue が
+永久に閉じない（実測: Issue #19 は `loop:review` のまま PR #22 がマージされ、人間が手で閉じた）。
+途中のフェーズで受理されていた場合は、閉じる前に `loop:done` へ揃えて以降拾われないようにする。
+
+> **なぜ必要か。GitHub の自動クローズは当てにならない。**
+> PR 本文の `Closes #<issue>` は、実測でこのリポジトリでは**一度も効いていない**。
+> PR #3 / #8 / #11 / #12 / #14 / #22 はすべて base=main・merged=true・本文に
+> `Closes #N` ありだったが、Issue #2 / #6 / #7 / #9 / #19 は1件も自動で閉じず、
+> 毎回人間が手で閉じていた（closed イベントの `commit_id` が空）。
+>
+> しかも `listCandidates` は `loop:done` を除外するので、**完了した Issue はもう拾われない。**
+> done にした run 自身はマージを見られない（マージは後で人間がやる）ため、
+> 見に行ける run が他に無い。だから各 run の先頭で掃除する。
 
 `config.presets[config.preset]` から `granularity` と `issues_per_run` を読む。
 
@@ -240,11 +260,15 @@ git rev-parse --abbrev-ref HEAD    # state.branch と一致しているか必ず
   **draft では作らない。** draft → ready の解除は GraphQL 専用でクラウドから叩けないため、
   開いたまま解除できない PR が残ってしまう。完了の signal は `loop:done` ラベルが持つので draft は不要。
 
-  **本文の末尾に `Closes #<issue>` を必ず入れる。** マージ時に Issue が自動でクローズされる。
-  これが無いと、完了した Issue が open のまま残り、`loop` ラベル付きなので
-  **次の run がまた拾ってしまう**（`loop:done` で除外されるが、ラベルを外すと再開する）。
+  **本文の末尾に `Closes #<issue>` を必ず入れる。`<issue>` は実際の番号に置き換える。**
+  プレースホルダのまま `Closes #<issue>` と書いても GitHub は何も紐付けない。
 
-  作成した PR 番号を状態の `pr` に入れる。
+  ただし**これをクローズの手段として当てにしない。** 実測でこのリポジトリでは
+  一度も効いていない（Step 0 参照）。確実に閉じるのは `reconcile-merged` の仕事である。
+  `Closes` は人間が PR 画面で対応 Issue を辿れるようにするために書く。
+
+  **作成した PR 番号を状態の `pr` に入れる。これを忘れると `reconcile-merged` が
+  マージを確認できず、Issue が永久に open のまま残る。**
 - 状態を `phase: review` にする。
 
 ### phase: review
