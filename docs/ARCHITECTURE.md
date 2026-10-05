@@ -94,23 +94,30 @@ wiring テストが「`background` の無い階層は 8000 以下」を強制す
 
 代償は次節の制約である。
 
-### 例外: テストだけは Actions で走らせる
+### テストはローカルの hook で走らせる（Actions は使わない）
 
-`.github/workflows/test.yml` が `npm test` を走らせる。**ここだけは Actions を使う。**
+**GitHub Actions は1本も置かない。** 無料枠を消費しない方針を、テストでも曲げない。
+代わりに Claude Code の **PostToolUse hook** で、仕組みを編集した直後に `npm test` を走らせる。
 
-理由は、仕組みを変えるのが人間の PR であり、そのとき `npm test` を走らせ忘れると
-安全装置が壊れたまま `main` に入るから。以前は CI が1本も無く、
-テストを走らせるのは人間の手作業だけだった。
+| | 置き場 |
+| --- | --- |
+| 設定 | `.claude/settings.json` の `hooks.PostToolUse`（`Edit` / `Write` に反応） |
+| 実体 | `loop/bin/hook-test.mjs` |
 
-無料枠（月2000分）を食わないよう、**トリガーを仕組みのパスに絞っている**
-（`loop/**` / `.claude/**` / `package.json` / ワークフロー自身）。
+動き方:
 
-- ループが毎時 push するのは `projects/<slug>/` と `daily/` で、テスト対象外。
-  ここで走らせても落ちる余地が無く、**全ブランチ全 push にすると月750分ほどを無駄にする**
-- 絞った結果、実際に走るのは仕組みを変える PR のときだけ。依存ゼロなので1回30秒ほど
+- 編集されたファイルが `loop/**` `.claude/**` `package.json` なら `npm test` を走らせる
+- `projects/**` `daily/**` は対象外。**ループが毎 run 触る場所で、テストと無関係**
+- 通ったら黙る。落ちたら `decision: "block"` で失敗したテスト名を Claude に返す
+- `jq` は使わない。ローカルにもサンドボックスにも無いので、stdin の解析も Node で行う
 
-ループ自身は `npm test` を走らせない。`loop/` と `.claude/` を書き換える手順が
+設定に長いワンライナーを埋めず、ロジックを `loop/bin/` に置いているのは
+他のスクリプトと同じ理由である（版管理でき、ユニットテストできる）。
+`isMachinery()` と `failedLines()` は純関数で、`loop/test/hook-test.test.mjs` が検証する。
+
+**ループ自身は `npm test` を走らせない。** `loop/` と `.claude/` を書き換える手順が
 そもそも無く（禁止事項にも明記）、走らせる手順を置いても発火しないためである。
+万一ループが仕組みを触れば、この hook が同じように止める。
 
 ## 前提にしている制約
 

@@ -577,31 +577,28 @@ test('ループは自分の仕組みを書き換えない', () => {
     '仕組みを変えたいときの出口（needs-human）が書かれていない');
 });
 
-test('仕組みの変更は CI が検査する', () => {
-  // 仕組みを変えるのは人間（とこのセッション）で、経路は PR。
-  // CI が無いと、ローカルで npm test を走らせ忘れたときに素通りする。
-  const ci = read('.github/workflows/test.yml');
-  assert.match(ci, /npm test/, 'CI が npm test を走らせていない');
-  assert.match(ci, /pull_request/, 'CI が PR で走らない');
-});
+test('仕組みの変更はローカルの hook が検査する', () => {
+  // 仕組みを変えるのは人間（とこのセッション）。走らせ忘れると安全装置が壊れたまま残る。
+  // GitHub Actions は使わない方針なので（無料枠を消費しない）、
+  // Claude Code の PostToolUse hook で編集直後に走らせる。
+  const settings = JSON.parse(read('.claude/settings.json'));
+  const post = settings.hooks?.PostToolUse ?? [];
+  assert.ok(post.length > 0, '.claude/settings.json に PostToolUse hook が無い');
 
-test('CI のトリガーが仕組みのパスに絞られている', () => {
-  // private リポジトリの Actions 無料枠は月2000分しかなく、
-  // 無料枠を消費しないことがこのリポジトリの設計判断でもある
-  // （docs/ARCHITECTURE.md「なぜ GitHub Actions ではないのか」）。
-  // ループは毎時 push するが、その push は projects/ と daily/ しか触らないので
-  // テストが落ちる余地が無い。全ブランチ全 push で走らせると月750分ほどを無駄にする。
-  const ci = read('.github/workflows/test.yml');
-  // コメント行を落としてから判定する。理由を書いた散文に禁止パターンが含まれるため
-  // （これを忘れて自分のコメントに引っかかった）
-  const yaml = ci.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  assert.doesNotMatch(yaml, /branches:\s*\['\*\*'\]/,
-    'CI が全ブランチの push で走る。無料枠を「絶対に落ちない検査」に使ってしまう');
-  assert.match(yaml, /paths:/, 'CI に paths フィルタが無い');
-  // テスト対象が実際に入っているパスを網羅していること
-  for (const p of ['loop/**', '.claude/**', 'package.json']) {
-    assert.ok(ci.includes(`'${p}'`), `CI の paths に ${p} が無い。変更が検査されずに入る`);
+  const entry = post.find((e) => /Edit|Write/.test(e.matcher ?? ''));
+  assert.ok(entry, 'Edit / Write に反応する hook が無い');
+  const cmds = (entry.hooks ?? []).filter((h) => h.type === 'command').map((h) => h.command);
+  assert.ok(cmds.some((c) => /hook-test\.mjs/.test(c)),
+    `hook が loop/bin/hook-test.mjs を呼んでいない: ${cmds.join(' / ')}`);
+
+  // jq はローカルにもサンドボックスにも無い。依存すると hook が黙って死ぬ
+  for (const c of cmds) {
+    assert.doesNotMatch(c, /\bjq\b/, `hook が jq に依存している: ${c}`);
   }
+
+  // Actions は使わない方針なので、ワークフローを置かない
+  assert.ok(!existsSync(resolve(ROOT, '.github/workflows')),
+    'GitHub Actions のワークフローがある。このリポジトリは Actions の無料枠を消費しない方針');
 });
 
 test('テストの実行経路が全テストファイルを拾う', () => {

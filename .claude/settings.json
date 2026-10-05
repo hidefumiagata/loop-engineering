@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node loop/bin/hook-test.mjs",
+            "timeout": 120,
+            "statusMessage": "npm test（仕組みの変更を検査）"
+          }
+        ]
+      }
+    ]
+  }
+}
