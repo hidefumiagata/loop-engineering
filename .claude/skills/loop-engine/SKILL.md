@@ -573,14 +573,41 @@ node loop/bin/issue-state.mjs write <issue> /tmp/state.json
 node loop/bin/issue-state.mjs sync-phase <issue> <phase>
 ```
 
-制御ラベル（`loop:needs-human` / `loop:go` / `loop:stop`）は別に操作する:
+制御ラベル（`loop:blocked` / `loop:needs-human` / `loop:go` / `loop:stop`）は別に操作する:
 
 ```bash
 node loop/bin/issue-state.mjs labels <issue> add    loop:needs-human
 node loop/bin/issue-state.mjs labels <issue> remove loop:go loop:needs-human
 ```
 
-### 4-4. push を確認する
+**`loop:blocked` を付けるのもこのコマンドである。**
+
+```bash
+node loop/bin/issue-state.mjs labels <issue> add loop:blocked loop:needs-human
+```
+
+> **`sync-phase <issue> blocked` と書いてはならない。** `blocked` はフェーズではないので
+> スクリプトが拒否する。`state.phase` には**再開すべきフェーズを残したまま**ラベルだけを付ける。
+> phase を `blocked` にすると、人間がラベルを外したあと再開先が無くなる
+> （この手順書に `### phase: blocked` の節は無い。実測: Issue #13 がその状態で詰まった）。
+
+### 4-4. `loop/` を変更したならテストを通す
+
+**`loop/bin/` `loop/config.json` `loop/prompts/` `.claude/` のいずれかに触ったら、
+commit する前に必ず走らせる。**
+
+```bash
+npm test
+```
+
+> 落ちたら**コミットしない。** テストは安全装置そのものなので、
+> 「テストを直して通す」のではなく、**なぜ落ちたかを先に理解する。**
+> 不変条件を意図的に変えるのなら、それは人間が判断することなので
+> `loop:needs-human` を付けて Issue に「何を変えたくて、どのテストと衝突したか」を書く。
+>
+> 成果物（`projects/<slug>/` や `daily/`）だけを変更した run では不要。
+
+### 4-5. push を確認する
 
 未コミットの変更が残っていないか確認する。残っていたらコミットして push する。
 `projects/<slug>/loop.json` に状態のミラーを書いておく（正は Issue コメント。

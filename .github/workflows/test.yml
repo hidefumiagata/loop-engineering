@@ -1,0 +1,19 @@
+name: test
+
+# ループが自分の安全装置を壊したことに気づけるようにする。
+# 以前は CI が無く、npm test を走らせるのは人間だけだった。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # サンドボックスと同じ系列に合わせる
+      # 依存ゼロなので install は無い。APIキーも不要（テストはネットワークを使わない）
+      - run: npm test

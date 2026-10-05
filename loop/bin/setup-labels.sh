@@ -25,7 +25,7 @@ LABELS=(
   "use:research|fef2c0|用途: 技術調査"
   "use:build|fef2c0|用途: プログラム構築"
   "use:ideation|fef2c0|用途: アイデア深堀"
-  "use:deliberation|f9d0c4|用途: 合議 (3LLMが案を出し相互評価する)"
+  "use:deliberation|f9d0c4|用途: 合議 (3LLMが案を出し敵対的レビューする)"
 )
 
 for entry in "${LABELS[@]}"; do

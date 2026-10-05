@@ -10,7 +10,7 @@ GitHub Issue に目的を書くと Claude Cloud の routine が自律的に作�
 | ループの挙動を変えたい | `.claude/skills/loop-engine/SKILL.md` — 手順の唯一の定義 |
 | モデル・上限・用途を変えたい | `loop/config.json` |
 | 作業やレビューの品質を変えたい | `loop/prompts/roles/` と `loop/prompts/usecases/` |
-| 合議の集計を変えたい | `loop/bin/aggregate.mjs` と `loop/test/aggregate.test.mjs` |
+| 合議の偏り検査を変えたい | `loop/bin/synthesis-check.mjs` と `loop/test/synthesis-check.test.mjs` |
 
 ロジックは routine の保存プロンプトではなく**すべてリポジトリ内**にある。
 挙動を変えたいときは claude.ai の設定をいじるのではなく、ここを編集して PR を出す。
@@ -98,14 +98,15 @@ projects/0012-mcp-security/          # pipeline
 
 projects/0013-agent-arch/            # panel
   brief.md         共有ブリーフ（唯一の事実源）
-  proposals/A.md B.md C.md .authors.json
-  evaluations/by-*.json
-  criteria.json    aggregate.mjs が読む評価基準
-  scores.json      機械集計の出力。手で書き換えない
-  decision.md      最終成果物
+  criteria.json    評価基準
+  proposals/       A.md B.md C.md（初稿）/ A.v2.md B.v2.md C.v2.md（改稿）/ .authors.json
+  challenges/by-*.json  敵対的レビューの結果。手で編集しない（議論の証跡）
+  answer.md        最終成果物
+  provenance.json  答案の要素 → 由来する案の対応表（統合役が宣言する）
+  synthesis-check.json  機械集計の出力。手で書き換えない
 ```
 
-`report.md` / `decision.md` は素の Markdown + 最小の front matter に統一する。
+`report.md` / `answer.md` は素の Markdown + 最小の front matter に統一する。
 後から手動で HTML / PPT に変換するため、凝った記法を使わない。
 
 ## 絶対に変えてはいけない不変条件
@@ -114,11 +115,14 @@ projects/0013-agent-arch/            # panel
 
 1. **レビュアーはワーカーと別モデル。** Claude が代行した場合は必ずその事実を
    `journal` と Issue に明記する。黙って自己採点させない。
-2. **`scores.json` は `aggregate.mjs` の出力であり、Claude は参照のみ。**
+2. **`synthesis-check.json` は `synthesis-check.mjs` の出力であり、Claude は参照のみ。**
    合議の結論がどこから来たかを検証可能に保つための境界。
+   統合のあと必ず `synthesis-check.mjs` を走らせる。走らせずに完了にしない。
 3. **panel の propose は Claude の案を単独コミットしてから他案を取る。**
    git 履歴が独立性の証跡になる。
 4. **panel は3案揃わなければ続行しない。** 2案の相互批評は決選投票が無く合議にならない。
-5. **合議の結論は人間が確定させる。** `require_human_decision: true` を自動化で迂回しない。
+5. **合議の結論は人間が確定させる。** エージェントは PR を作るところまでで、
+   **マージはしない**。`require_human_decision` は `false`（承認待ちで run を止めない）で、
+   人間の確定はマージという操作が担う。
 6. **`loop` ラベルが付いていない Issue を触らない。**
 7. **`main` へ直接 push しない。** ブランチは必ず `claude/` 接頭辞。

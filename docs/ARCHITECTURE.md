@@ -8,13 +8,14 @@ GitHub Issue に目的を書くと、Claude Cloud の routine が自律的に作
 ```
 GitHub (private)
   Issues(label:loop) ──── 状態は Issue 上の固定コメント1件に集約 ────┐
-  branches claude/loop-<n>-<slug> → draft PR                        │
+  branches claude/loop-<n>-<slug> → PR（通常PR。draft は使わない）                        │
   projects/<n>-<slug>/ 成果物と過程の記録                             │
         ▲ clone / push / gh（GH_TOKEN は自動設定）                    │
         │                                                           │
 Claude Cloud Routine "loop-engine" ─────────────────────────────────┘
-  trigger : cron 0 0,6,12 * * * (UTC) = JST 09/15/21 の3回
-            + API /fire（手動発火。日次上限5のうち2 run を予備に残す）
+  trigger : cron 0 * * * * (UTC) = 毎時（loop/config.json の preset: "hourly" と対応）
+            + API /fire（手動発火）
+            ※ claude.ai 側の実設定が正。ここと config.preset は必ず揃えること
   env     : loop-env（Network=Full / API credentials: Gemini・OpenAI）
   model   : Sonnet 5
   prompt  : 「.claude/skills/loop-engine/SKILL.md を読んで厳密に従え」
@@ -141,13 +142,15 @@ plan(1) + work(3) + review(3) = 7 run
 pipeline:  plan → work → review ─┬─ PASS ──→ done
                    ↑             ├─ REVISE → work （iteration++）
                    └─────────────┘
-                                 └─ BLOCKED → blocked + needs-human
-           iteration > max_iterations → blocked + needs-human
+                                 └─ BLOCKED → phase は work のまま
+                                              + loop:blocked + loop:needs-human
+           iteration > max_iterations → 同じ扱い
 
-panel:     brief → propose → evaluate → synthesize → critique ─┬─ PASS → PR作成 → done
-             ↑                                     ↑ REVISE   │        （マージは人間）
-             │                                     └──1回だけ──┘
-             └── 重み3が全案未達 / BLOCKED のとき round++ して propose へ（max_panel_rounds まで）
+panel:     brief → propose → challenge → revise → synthesize → PR作成 → done
+                                                                （マージは人間）
+
+★ blocked は phase ではなくラベルで表す。phase には「次にどこから再開するか」を残す。
+  phase: blocked と書くと、人間がラベルを外したあと再開先が無くなる（実測: Issue #13）。
 ```
 
 ### Issue に成果物を書かない
@@ -164,7 +167,7 @@ run ごとに結果コメントを積むと Issue が読めなくなり、
 成果物の正がどこにあるのかが曖昧になる。読む場所を PR に一本化している。
 やったこと・コスト・使った他社LLM は `journal/` と `*.meta.json` に残り、PR から辿れる。
 
-ラベルは状態の人間向けミラーであり、`gh issue list` のフィルタでもある。
+ラベルは状態の人間向けミラーであり、REST の `/issues?labels=` のフィルタでもある。
 `loop:stop` は緊急停止スイッチで、`issue-state.mjs list` が即座に対象から外す。
 
 ### 冪等性
@@ -187,7 +190,8 @@ run が途中で落ちた場合、状態コメントは更新されていない�
 「公式に書いてあった気がするが実はブログの記述だった」という取り違えが起き、
 しかも後から検証できない。文脈を分けておけば突き合わせる相手が残る。
 
-**突き合わせ役には Web ツールを与えていない**（`tools: Read, Write, Glob, Grep`）。
+**突き合わせ役には Web ツールも Write も与えていない**（`tools: Read, Glob, Grep`）。
+レポート本文はテキストで返させ、本体が転記する（ハーネスが report の書き込みを拒否するため）。
 追加調査で穴を埋められると、1と2を照合する意味が消えるため。
 材料が足りなければ「情報なし」と書くのが正しい振る舞いになる。
 
@@ -329,10 +333,12 @@ Claude だけがファイル・git・gh・Web を触れる。他2者は REST の
    1呼び出しで $0.38〜0.50 になる
 
 **コストを抑えたいなら締めるべきはモデルの単価ではなく出力長である。**
-ただし `max_output_tokens` を下げて打ち切ると再実行になり、
+ただし `max_output_tokens` で削るのは筋が悪い。下げて打ち切ると再実行になり、
 **打ち切られた1回目の課金は `*.meta.json` に残らないまま消える**（Issue #10 の改稿で実際に起きた）。
-だから上限は 16,000 を下回らせない。出力を短くしたいなら `proposer.md` / `reviser.md` の
-語数指示を締めるか、`reasoning_effort` を下げる。
+逆に同期階層で上げると約30秒のプロキシ制限に当たって 502 になる（Issue #25）。
+**上限は「出力を短くする道具」ではなく、同期／非同期の制約である**（前述の表）。
+出力を短くしたいなら `proposer.md` / `reviser.md` の語数指示を締めるか、
+`reasoning_effort` を下げる。
 
 月4件 × 2ラウンド = 8ラウンドで **約 $11.5/月**。
 `docs/SETUP.md` が勧めている OpenAI の使用量上限 **月$10 はこの頻度だと先に当たる**。

@@ -36,22 +36,23 @@ Cloud セッションがリポジトリを clone / push するために必要。
 bash loop/bin/setup-labels.sh
 ```
 
-17件のラベルが作成される。べき等なので何度実行してもよい。
+ラベルが作成される（件数はスクリプトが出力する）。べき等なので何度実行してもよい。
 
 ## 4. APIキーを発行する
 
 ### Gemini（必須）
 
 1. <https://aistudio.google.com/apikey> でキーを発行する
-2. **課金を有効にする。** `gemini-3.1-pro` を panel の提案・評価で使うため。
+2. **課金を有効にする。** `gemini-3.8-flash` を panel の提案・敵対的レビュー・改稿で使うため。
    通常レビューは無料枠モデル（`gemini-3.1-flash-lite`）のままなので、
    合議を回さなければ課金は発生しない
 
 ### OpenAI（panel モードを使うなら必須）
 
 1. <https://platform.openai.com/api-keys> でキーを発行する
-2. **使用量上限を設定する**（Settings → Limits）。月 $10 程度で十分。
-   合議8ラウンドでも $1 未満だが、設定ミスに対する最終防壁として必ず入れる
+2. **使用量上限を設定する**（Settings → Limits）。設定ミスに対する最終防壁として必ず入れる。
+   **合議は1ラウンド約 $1.44（実測）**で、月4件×2ラウンド＝8ラウンドなら約 $11.5。
+   月 $10 だと先に当たるので、頻度を落とすか上限を上げるかを決めてから設定する
 
 合議を使わないなら OpenAI キーは不要。`loop/config.json` の
 `providers.openai.tiers.*.enabled` をすべて `false` にしておけば呼ばれない。
@@ -243,10 +244,10 @@ routine 詳細ページで **Run now**。確認すること:
 - [ ] Issue に「ループ状態」コメントが1件できている
 - [ ] フェーズが plan → work → review → 判定 まで進んでいる
 - [ ] `projects/0001-*/report.md` `sources.md` `journal/` ができている
-- [ ] draft PR が立っている
+- [ ] 通常 PR が立っている（draft ではない）
 - [ ] `journal/NNN-review.md` の冒頭が `reviewer: gemini:review (...)` である
       （`claude (fallback)` になっていたら Gemini 側の設定を疑う）
-- [ ] Issue コメントに実測コストの表が入っている
+- [ ] `journal/NNN-review.json.meta.json` に実測コストが入っている（Issue には書かれない）
 
 ### 7-6. panel の E2E
 
@@ -319,7 +320,7 @@ Issue を1件作る（用途: 合議）。例:
 | `gh` が `403 GitHub GraphQL is not available from Claude Code sessions` | クラウドセッションの制約。`--json` 系サブコマンドは使えない。`gh api`（REST）か `issue-state.mjs` のサブコマンドに置き換える。`npm test` の wiring テストがこの種の混入を検出する |
 | 成果物が `claude/loop-<n>-<slug>` 以外のブランチに入った | セッションが自動生成ブランチで始まり、`git checkout -B` が実行されていない。SKILL.md の Step 2 を確認する |
 | 日次上限に達した | スキップされた run は**翌日に繰り越されない**。cron 回数を減らすか Max を検討する |
-| Issue を作った直後の Run now が「対象なし」で終わる | `gh issue list --label` が引く GitHub のラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
+| Issue を作った直後の Run now が「対象なし」で終わる | 除外ラベル（`loop:stop` / `loop:done` / `loop:blocked` / `loop:needs-human`）が付いていないか確認する。REST の `/issues?labels=` は検索インデックスを経由しないので、反映待ちは起きない。旧記述（ラベル検索インデックスに載るまで数十秒〜数分かかる（実測で確認）。少し待ってもう一度発火する |
 
 ## プランを Max に上げたとき
 

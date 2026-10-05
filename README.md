@@ -6,7 +6,7 @@ GitHub Issue に「達成したいこと」を書くと、AIエージェント�
 ```
 Issue を書く  →  定期実行が着手  →  作業  →  別モデルがレビュー  →  未達なら作業に戻る
                                                                  ↓ 満たしたら
-                                                      draft PR が ready になる
+                                                      通常 PR が立つ
 ```
 
 成果物・過程の記録・意思決定記録はすべてこのリポジトリで管理される。
@@ -76,7 +76,7 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 
 1. [新しい Issue を作る](../../issues/new/choose)（「ループタスク」テンプレート）
 2. 用途を選び、達成したいことを書く
-3. 次の定期実行（JST 09:00 / 15:00 / 21:00）で着手される。急ぐときは routine の **Run now**
+3. 次の定期実行（毎時）で着手される。急ぐときは routine の **Run now**
 4. 進行は Issue 上の「ループ状態」コメントと `loop:*` ラベルで追える。
    **成果物は Issue ではなく PR で読む**（Issue は目的と状態だけを持つ）
 5. 止めたくなったら **`loop:stop` ラベル**を付ける
@@ -103,7 +103,7 @@ loop/
   jobs/               定期ジョブの定義（MD1枚で1ジョブ）
   bin/jobs.mjs        ジョブ定義の読み込み
   bin/ask-llm.mjs     他社LLM の REST アダプタ（依存ゼロ）
-  bin/aggregate.mjs   合議スコアの機械集計（純関数）
+  bin/synthesis-check.mjs   合議スコアの機械集計（純関数）
   bin/synthesis-check.mjs 結論の寄与比率を算出し自案への偏りを検出（純関数）
   bin/issue-state.mjs Issue コメントへの状態の読み書き
   test/               aggregate / issue-state / 設定整合性(wiring) のテスト
@@ -138,7 +138,7 @@ OpenAI の使用量上限 **月$10 はこの頻度だと先に当たる**ので�
 ## 開発
 
 ```bash
-npm test                      # ユニットテスト（キー不要、73件）
+npm test                      # ユニットテスト（キー不要）
 bash loop/bin/setup-labels.sh # ラベルを作成/更新（べき等）
 ```
 
