@@ -583,7 +583,25 @@ test('仕組みの変更は CI が検査する', () => {
   const ci = read('.github/workflows/test.yml');
   assert.match(ci, /npm test/, 'CI が npm test を走らせていない');
   assert.match(ci, /pull_request/, 'CI が PR で走らない');
-  assert.match(ci, /push:/, 'CI が push で走らない');
+});
+
+test('CI のトリガーが仕組みのパスに絞られている', () => {
+  // private リポジトリの Actions 無料枠は月2000分しかなく、
+  // 無料枠を消費しないことがこのリポジトリの設計判断でもある
+  // （docs/ARCHITECTURE.md「なぜ GitHub Actions ではないのか」）。
+  // ループは毎時 push するが、その push は projects/ と daily/ しか触らないので
+  // テストが落ちる余地が無い。全ブランチ全 push で走らせると月750分ほどを無駄にする。
+  const ci = read('.github/workflows/test.yml');
+  // コメント行を落としてから判定する。理由を書いた散文に禁止パターンが含まれるため
+  // （これを忘れて自分のコメントに引っかかった）
+  const yaml = ci.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.doesNotMatch(yaml, /branches:\s*\['\*\*'\]/,
+    'CI が全ブランチの push で走る。無料枠を「絶対に落ちない検査」に使ってしまう');
+  assert.match(yaml, /paths:/, 'CI に paths フィルタが無い');
+  // テスト対象が実際に入っているパスを網羅していること
+  for (const p of ['loop/**', '.claude/**', 'package.json']) {
+    assert.ok(ci.includes(`'${p}'`), `CI の paths に ${p} が無い。変更が検査されずに入る`);
+  }
 });
 
 test('テストの実行経路が全テストファイルを拾う', () => {

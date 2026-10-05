@@ -1,11 +1,24 @@
 name: test
 
-# ループが自分の安全装置を壊したことに気づけるようにする。
-# 以前は CI が無く、npm test を走らせるのは人間だけだった。
+# 仕組み（手順書・設定・プロンプト・スクリプト・テスト）を変える PR だけで走らせる。
+#
+# ★ トリガーを広げてはならない。
+#   このリポジトリは private で、Actions の無料枠は月2000分しかない
+#   （docs/ARCHITECTURE.md「なぜ GitHub Actions ではないのか」）。
+#   ループは毎時 push するが、その push は projects/<slug>/ や daily/ しか触らず、
+#   テストが落ちる余地が無い。branches: ['**'] にすると月750分ほどを
+#   「絶対に落ちない検査」に使うことになる。
+#   仕組みを変えるのは人間の PR だけなので、paths でそこに絞る。
 on:
-  push:
-    branches: ['**']
   pull_request:
+    paths: &machinery
+      - 'loop/**'
+      - '.claude/**'
+      - 'package.json'
+      - '.github/workflows/test.yml'
+  push:
+    branches: [main]
+    paths: *machinery
 
 jobs:
   test:
