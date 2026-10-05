@@ -3,7 +3,6 @@
 //
 //   node loop/bin/issue-state.mjs read       12
 //   node loop/bin/issue-state.mjs write      12 state.json
-//   node loop/bin/issue-state.mjs decision   12
 //   node loop/bin/issue-state.mjs list
 //   node loop/bin/issue-state.mjs comment    12 body.md
 //   node loop/bin/issue-state.mjs sync-phase 12 review
@@ -81,19 +80,34 @@ export function repoSlug() {
 // ---------------- 状態の検証 ----------------
 
 const REQUIRED = ['issue', 'usecase', 'mode', 'slug', 'branch', 'phase', 'iteration', 'max_iterations'];
+
+/**
+ * 有効なフェーズ。**`blocked` は含めない。**
+ *
+ * `state.phase` は「次の run がどこから再開するか」を表す値であり、
+ * `blocked` はラベル（`loop:blocked`）で表す。phase に書くと、人間がラベルを外したあと
+ * 再開先が無くなる（手順書に `### phase: blocked` の節は存在しない）。
+ * 実測: Issue #13 が `phase: blocked` のまま残り、ラベルを外しても段階3へ戻れなかった。
+ */
 const PHASES = {
-  pipeline: ['plan', 'work', 'review', 'done', 'blocked'],
+  pipeline: ['plan', 'work', 'review', 'done'],
   // panel は4段。3者が意見を出し（propose）、自分以外を敵対的レビューし（challenge）、
   // 指摘を受けて各自が改稿し（revise）、Claude の別サブエージェントが結論をまとめる（synthesize）。
   // 採点は行わない。評価の役割は敵対的レビューが担う。
-  panel: ['brief', 'propose', 'challenge', 'revise', 'synthesize', 'done', 'blocked'],
+  panel: ['brief', 'propose', 'challenge', 'revise', 'synthesize', 'done'],
 };
 
 export function validateState(s) {
   const problems = [];
   for (const k of REQUIRED) if (s[k] === undefined || s[k] === null) problems.push(`必須フィールド ${k} がありません`);
   if (s.mode && !PHASES[s.mode]) problems.push(`未知の mode: ${s.mode}`);
-  if (s.mode && PHASES[s.mode] && !PHASES[s.mode].includes(s.phase)) {
+  if (s.phase === 'blocked') {
+    problems.push(
+      'phase に blocked は書けません。blocked はラベルで表します。'
+      + ' 再開すべきフェーズを phase に残したまま'
+      + ' `node loop/bin/issue-state.mjs labels <issue> add loop:blocked loop:needs-human` を使ってください',
+    );
+  } else if (s.mode && PHASES[s.mode] && !PHASES[s.mode].includes(s.phase)) {
     problems.push(`mode=${s.mode} に phase=${s.phase} は不正です (有効: ${PHASES[s.mode].join(', ')})`);
   }
   if (typeof s.iteration === 'number' && typeof s.max_iterations === 'number' && s.iteration > s.max_iterations + 1) {
@@ -201,55 +215,39 @@ export function writeState(issue, state, repo = repoSlug()) {
 }
 
 /**
- * 人間の確定コメントを探す。
- * panel モードは require_human_decision が true なので、Issue 上の `/decide <ラベル>` を待つ。
- * 状態コメントより後に投稿されたものだけを有効とし、古い指示を再実行しないようにする。
- */
-export function readDecision(issue, repo = repoSlug()) {
-  const comments = listComments(repo, issue);
-  const stateComment = comments.find((c) => c.body.includes(MARKER));
-  const after = stateComment ? new Date(stateComment.created_at) : new Date(0);
-
-  // 状態コメントは更新されても created_at が変わらないため、更新時刻は状態側の updated_at を使う
-  let since = after;
-  if (stateComment) {
-    try {
-      const u = parseStateComment(stateComment.body).updated_at;
-      if (u) since = new Date(u);
-    } catch { /* 解析できなければ created_at のままにする */ }
-  }
-
-  const hits = comments
-    .filter((c) => !c.body.includes(MARKER))
-    .filter((c) => new Date(c.created_at) > since)
-    .map((c) => {
-      const m = c.body.match(/(?:^|\s)\/decide\s+([A-Za-z0-9_-]+)/);
-      return m ? { label: m[1], by: c.user, at: c.created_at } : null;
-    })
-    .filter(Boolean);
-
-  return hits.length ? hits[hits.length - 1] : null;
-}
-
-/**
  * ループ対象の Issue を古い順に列挙する（先頭を処理するとラウンドロビンになる）。
  * REST の /issues は Pull Request も混ぜて返すので pull_request を持つものを除く。
  */
+/**
+ * 候補 Issue を引く REST パス。純関数。
+ *
+ * **`labels=loop` を外してはならない。** 不変条件「`loop` ラベルが付いていない Issue を触らない」
+ * はこの1語で担保されている。外すと、無関係な Issue を勝手に編集しうる。
+ */
+export function candidatesPath(repo) {
+  return `repos/${repo}/issues?labels=loop&state=open&sort=updated&direction=asc&per_page=100`;
+}
+
+/** 候補から外すラベル。`loop:needs-human` は `loop:go` が付くまで外す */
+export const EXCLUDE_LABELS = ['loop:stop', 'loop:done', 'loop:blocked'];
+
+/** この Issue をループの対象にしてよいか。純関数 */
+export function isCandidate({ labels, is_pr: isPr }) {
+  if (isPr) return false;
+  if (!labels.includes('loop')) return false;
+  if (EXCLUDE_LABELS.some((l) => labels.includes(l))) return false;
+  // 人間の判断待ちは、go が付くまで触らない
+  if (labels.includes('loop:needs-human') && !labels.includes('loop:go')) return false;
+  return true;
+}
+
 export function listCandidates(repo = repoSlug()) {
   const raw = ghJsonLines([
-    'api', '--paginate',
-    `repos/${repo}/issues?labels=loop&state=open&sort=updated&direction=asc&per_page=100`,
+    'api', '--paginate', candidatesPath(repo),
     '--jq', '[.[] | {number, title, labels: [.labels[].name], updatedAt: .updated_at, is_pr: has("pull_request")}]',
   ]);
   return raw
-    .filter((i) => !i.is_pr)
-    .filter((i) => {
-      const l = i.labels;
-      if (l.includes('loop:stop') || l.includes('loop:done') || l.includes('loop:blocked')) return false;
-      // 人間の判断待ちは、go が付くまで触らない
-      if (l.includes('loop:needs-human') && !l.includes('loop:go')) return false;
-      return true;
-    })
+    .filter((i) => isCandidate(i))
     .map(({ number, title, labels, updatedAt }) => ({ number, title, labels, updatedAt }))
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 }
@@ -300,15 +298,20 @@ export const BLOCKED_LABEL = 'loop:blocked';
  * フェーズラベルを1つだけに揃える。`loop` / `use:*` / 制御ラベル（needs-human, go, stop）は触らない。
  * 手でラベルを足し引きさせると取り違えが起きるので、この操作をスクリプト側に閉じ込める。
  *
- * `loop:blocked` は例外で、`phase: blocked` に揃えるときだけ付ける。
- * 他のフェーズに揃えるときは**外さない**（外せるのは人間だけ）。
+ * **`loop:blocked` はここでは扱わない。** `labels add` で付け、人間が外す。
+ * ここで受理すると、`sync-phase <issue> blocked` と書かれたときに進行ラベルを剥がしてしまい、
+ * 人間が blocked を外したあとフェーズラベルが無い状態になる。
  */
 export function syncPhase(issue, phase, repo = repoSlug()) {
   const want = `loop:${phase}`;
-  if (![...PHASE_LABELS, BLOCKED_LABEL].includes(want)) {
+  if (want === BLOCKED_LABEL) {
     throw new Error(
-      `未知のフェーズ: ${phase} (有効: ${[...PHASE_LABELS, BLOCKED_LABEL].join(', ')})`,
+      'blocked は sync-phase で扱いません。再開すべきフェーズを phase に残したまま'
+      + ` \`node loop/bin/issue-state.mjs labels ${issue} add loop:blocked loop:needs-human\` を使ってください`,
     );
+  }
+  if (!PHASE_LABELS.includes(want)) {
+    throw new Error(`未知のフェーズ: ${phase} (有効: ${PHASE_LABELS.join(', ')})`);
   }
   // 読み取りは GET なので DRY でも実行する。でないと dry-run が削除対象を表示できない。
   const have = currentLabels(issue, repo);
@@ -337,7 +340,6 @@ const USAGE = [
   '使い方:',
   '  node loop/bin/issue-state.mjs read <issue>              状態を JSON で標準出力（無ければ null）',
   '  node loop/bin/issue-state.mjs write <issue> <file.json> 状態コメントを作成/更新',
-  '  node loop/bin/issue-state.mjs decision <issue>          状態更新後に投稿された /decide <ラベル> を取得',
   '  node loop/bin/issue-state.mjs list                      ループ対象 Issue を古い順に列挙',
   '  node loop/bin/issue-state.mjs comment <issue> <file.md> 人間可読コメントを投稿',
   '  node loop/bin/issue-state.mjs sync-phase <issue> <phase> フェーズラベルを1つに揃える',
@@ -365,11 +367,6 @@ function main() {
       const r = writeState(Number(a1), state);
       process.stderr.write(`[ok] issue #${a1} state comment ${r.commentId ?? '(dry-run)'} ${r.created ? '新規作成' : '更新'}\n`);
       console.log(JSON.stringify(state, null, 2));
-      break;
-    }
-    case 'decision': {
-      if (!a1) throw new Error(USAGE);
-      console.log(JSON.stringify(readDecision(Number(a1)), null, 2));
       break;
     }
     case 'list': {

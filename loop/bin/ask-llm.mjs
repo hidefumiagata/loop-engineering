@@ -53,6 +53,31 @@ export function resolveTier(spec, config = loadConfig()) {
   return { providerName, tierName, provider, tier };
 }
 
+/** `background: true` を実装しているプロバイダ。buildRequest がこれしか見ていない */
+export const ASYNC_PROVIDERS = ['openai'];
+
+/** 同期呼び出しが約30秒のプロキシ制限内に返しきれる上限 */
+export const SYNC_MAX_OUTPUT_TOKENS = 8000;
+
+/**
+ * 出力上限を決める。**階層ごとの制約なので config が正。** 純関数。
+ *
+ * 同期呼び出し（background 無し）はエージェントプロキシの約30秒制限内に返しきる必要があり、
+ * 上限を上げると 502 になる（実測: Issue #25 で gemini:propose が 16000 で止まった）。
+ * 非同期（background: true）はポーリングで取るので上げてよい
+ * （実測: Issue #10 で openai:propose が 8000 では打ち切られた）。
+ * この非対称を散文で管理すると必ずずれるので、ここ1箇所で解決する。
+ *
+ * @param {string|{provider:string,tier:string}} spec
+ * @param {object} [config]
+ * @param {number|null} [override] 明示指定があればそれを使う（一時的な上書き用）
+ */
+export function resolveMaxOutputTokens(spec, config = loadConfig(), override = null) {
+  if (override != null) return Number(override);
+  const { tier } = resolveTier(spec, config);
+  return tier.max_output_tokens ?? SYNC_MAX_OUTPUT_TOKENS;
+}
+
 /** 実測トークン数から USD を算出 */
 export function computeCost(tier, usage) {
   const p = tier.price_per_mtok ?? { in: 0, out: 0 };
@@ -336,11 +361,7 @@ export async function askLLM({
     throw new Error(`未知のスキーマ: ${schema} (有効: ${SCHEMA_NAMES.join(', ')})`);
   }
   const { providerName, tierName, provider, tier } = resolveTier(spec, config);
-  // ★ 出力上限は階層ごとの制約なので config に持たせる。呼び出し側が数字を書かない。
-  //   同期呼び出し（background 無し）はエージェントプロキシの約30秒制限内に返しきる必要があり、
-  //   上限を上げると 502 になる。非同期（background: true）は上げてよい。
-  //   この非対称を散文で管理すると必ずずれるので、tier.max_output_tokens を正とする。
-  maxOutputTokens = maxOutputTokens ?? tier.max_output_tokens ?? 8000;
+  maxOutputTokens = resolveMaxOutputTokens(spec, config, maxOutputTokens);
   const { url, body } = buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens });
   const { headers, mode } = authHeaders(provider);
 
@@ -479,6 +500,16 @@ async function main() {
   const maxWaitSec = args.max_wait ? Number(args.max_wait) : 420;
 
   const r = await askLLM({ spec, system, input, schema, maxOutputTokens, maxWaitSec });
+
+  // ★ ドライランでは一切書き込まない。
+  //   ここで書くと、既にある成果物がプレースホルダに、既にある *.meta.json が
+  //   cost_usd: 0 に置き換わる。実リポジトリに対してドライランする運用があるため
+  //   （docs/SETUP.md の動作確認）、これは成果物とコスト記録の破壊になる。
+  //   SKILL.md の絶対規則6（DRY では書き込まない）と禁止事項（*.meta.json を編集しない）の両方に反する。
+  if (r.dryRun) {
+    process.stderr.write(`[dry-run] 書き込む予定: ${args.out} と ${args.out}.meta.json（実行しません）\n`);
+    return;
+  }
 
   writeFileSync(args.out, schema ? JSON.stringify(r.parsed, null, 2) + '\n' : r.text, 'utf8');
   writeFileSync(`${args.out}.meta.json`, JSON.stringify({

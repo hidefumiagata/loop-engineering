@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, globSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTier } from '../bin/ask-llm.mjs';
@@ -115,27 +115,44 @@ test('クラウドで 403 になる GraphQL 経路の gh コマンドを使っ�
     [/gh\s+pr\s+ready/, 'gh pr ready — draft 解除は GraphQL 専用。通常PRで作るので不要'],
     [/gh\s+pr\s+view/, 'gh pr view — gh api repos/{repo}/pulls/{n} を使う'],
   ];
+  // ★ 対象をハードコードしない。新しいプロンプトやエージェントを足したら自動で検査される。
+  //   以前は6ファイル固定で、usecases/research.md や .claude/agents/* が未検査だった。
   const targets = [
-    ['.claude/skills/loop-engine/SKILL.md', SKILL],
-    ['loop/bin/issue-state.mjs', read('loop/bin/issue-state.mjs')],
-    ['loop/bin/ask-llm.mjs', read('loop/bin/ask-llm.mjs')],
-    ['loop/bin/synthesis-check.mjs', read('loop/bin/synthesis-check.mjs')],
-    ['loop/prompts/roles/worker.md', read('loop/prompts/roles/worker.md')],
-    ['loop/prompts/usecases/deliberation.md', read('loop/prompts/usecases/deliberation.md')],
-  ];
-  // 「使ってはいけないもの」を列挙している区間は、マーカーで明示的に除外する。
-  // キーワード判定で誤魔化すと、本当の違反を取りこぼす。
-  const stripExcluded = (text) =>
-    text.replace(/<!-- graphql-forbidden-table:start[\s\S]*?graphql-forbidden-table:end -->/g, '');
+    ...globSync('loop/bin/*.mjs', { cwd: ROOT }),
+    ...globSync('loop/prompts/**/*.md', { cwd: ROOT }),
+    ...globSync('.claude/agents/*.md', { cwd: ROOT }),
+    ...globSync('.claude/skills/*/SKILL.md', { cwd: ROOT }),
+  ].map((rel) => rel.split('\\').join('/'));
+  assert.ok(targets.length >= 15, `検査対象の収集に失敗 (${targets.length} 件)`);
 
-  for (const [path, text] of targets) {
-    // 散文で「これは GraphQL なので使えない」と注意している行も対象外にする
-    const lines = stripExcluded(text).split('\n').filter((l) => !/使えない|使わない|GraphQL/.test(l));
+  // ★ 散文ではなくコードだけを走査する。
+  //   以前は「行に GraphQL / 使えない と書いてあればスキップ」していたが、
+  //   違反行にその語を書くだけで検査を外せた（実測）。
+  //   散文で「`gh pr create` は使えない」と注意するのは正しいので、
+  //   除外ではなく「実際に実行される箇所」だけを見る形にする。
+  const codeOf = (path, text) => {
+    if (path.endsWith('.mjs')) {
+      // 行コメントとブロックコメントを落とす
+      return text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+        .filter((l) => !/^\s*\/\//.test(l))
+        .map((l) => l.replace(/\/\/.*$/, ''))
+        .join('\n');
+    }
+    // Markdown は ```bash / ```sh フェンスの中だけが実行される
+    return [...text.matchAll(/```(?:bash|sh|shell)\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
+  };
+
+  let scanned = 0;
+  for (const path of targets) {
+    const code = codeOf(path, read(path));
+    if (!code.trim()) continue;
+    scanned++;
     for (const [re, why] of forbidden) {
-      const hit = lines.find((l) => re.test(l));
+      const hit = code.split('\n').find((l) => re.test(l));
       assert.ok(!hit, `${path} が GraphQL 経路の gh を使っている: ${why}\n  → ${hit}`);
     }
   }
+  assert.ok(scanned >= 4, `コードを含む対象が ${scanned} 件しか無い。抽出に失敗している`);
 });
 
 test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使っていない', () => {
@@ -147,7 +164,9 @@ test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使ってい�
   // ここで fetch に戻すと、また「credential を登録したのに 403」で数時間溶かすことになる。
   const src = read('loop/bin/ask-llm.mjs');
   const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-  assert.doesNotMatch(code, /(?<![.\w])fetch\s*\(/, 'ask-llm.mjs がグローバル fetch を呼んでいる。curlPostJson を使うこと');
+  // 後読みで除外すると globalThis.fetch( がすり抜ける（実測）。素直に全部弾く。
+  assert.doesNotMatch(code, /\bfetch\s*\(/, 'ask-llm.mjs が fetch を呼んでいる。curlPostJson を使うこと');
+  assert.doesNotMatch(code, /globalThis\.fetch|global\[['"]fetch/, 'グローバル経由の fetch も禁止');
   assert.match(code, /execFileSync\('curl'/, 'curl 経由であることを明示的に確認する');
 });
 
@@ -537,7 +556,7 @@ test('出力上限が同期/非同期の制約と整合している', () => {
 test('手順書が出力上限を自分で渡していない', () => {
   // 上限は階層ごとの制約。散文に数字を書くと config と二重管理になり、
   // 同期階層に非同期向けの値が付いて 502 になる（実測: Issue #25）。
-  assert.doesNotMatch(SKILL, /--max-output-tokens \d/,
+  assert.doesNotMatch(SKILL, /--max-output-tokens[ =]\d/,
     '手順書が --max-output-tokens に数値を渡している。config の tiers.*.max_output_tokens が正');
   assert.match(SKILL, /`--max-output-tokens` を自分で渡さない/,
     '渡さない方針を手順書に残す');

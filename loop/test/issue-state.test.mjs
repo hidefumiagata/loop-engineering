@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER, PHASE_LABELS, BLOCKED_LABEL } from '../bin/issue-state.mjs';
+import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER, PHASE_LABELS, BLOCKED_LABEL, candidatesPath, isCandidate, EXCLUDE_LABELS, syncPhase } from '../bin/issue-state.mjs';
 
 const pipelineState = {
   issue: 12,
@@ -144,4 +144,62 @@ test('sync-phase は loop:blocked を勝手に外さない', () => {
     'brief', 'propose', 'challenge', 'revise', 'synthesize']) {
     assert.ok(PHASE_LABELS.includes(`loop:${p}`), `loop:${p} が PHASE_LABELS に無い`);
   }
+});
+
+// ---- 候補 Issue の絞り込み（CLAUDE.md 不変条件6） ----
+//
+// 実測: listCandidates の labels=loop を外しても既存テストは1件も落ちなかった。
+// これは「loop ラベルが付いていない Issue を触らない」という最も影響の大きい不変条件なので、
+// 純関数に切り出して直接検証する。
+
+test('候補のクエリは loop ラベルで絞っている', () => {
+  const path = candidatesPath('owner/repo');
+  assert.match(path, /[?&]labels=loop(&|$)/,
+    'labels=loop が無い。loop ラベルの付いていない Issue を触ってしまう');
+  assert.match(path, /[?&]state=open(&|$)/, 'open だけを対象にする');
+  assert.match(path, /[?&]direction=asc(&|$)/, '古い順（ラウンドロビン）');
+  assert.ok(path.startsWith('repos/owner/repo/issues?'), `パスの形が変わった: ${path}`);
+});
+
+test('loop ラベルが無い Issue は候補にしない', () => {
+  assert.equal(isCandidate({ labels: ['use:research'], is_pr: false }), false);
+  assert.equal(isCandidate({ labels: ['loop'], is_pr: false }), true);
+});
+
+test('PR は候補にしない', () => {
+  // REST の /issues は PR も返す。触ると PR の本文を状態コメントで汚す
+  assert.equal(isCandidate({ labels: ['loop'], is_pr: true }), false);
+});
+
+test('停止・完了・ブロック中は候補にしない', () => {
+  for (const l of EXCLUDE_LABELS) {
+    assert.equal(isCandidate({ labels: ['loop', l], is_pr: false }), false, `${l} を除外していない`);
+  }
+  assert.deepEqual(EXCLUDE_LABELS, ['loop:stop', 'loop:done', 'loop:blocked']);
+});
+
+test('needs-human は go が付くまで候補にしない', () => {
+  assert.equal(isCandidate({ labels: ['loop', 'loop:needs-human'], is_pr: false }), false);
+  assert.equal(isCandidate({ labels: ['loop', 'loop:needs-human', 'loop:go'], is_pr: false }), true);
+});
+
+// ---- phase に blocked を書けない（PR #21 の決定を機械で縛る） ----
+
+test('phase: blocked は書き込めない', () => {
+  // blocked はラベルで表す。phase に書くと、人間がラベルを外したあと再開先が無くなる。
+  // 実測: Issue #13 が phase: blocked のまま残り、段階3へ戻れなかった。
+  for (const mode of ['pipeline', 'panel']) {
+    assert.throws(
+      () => validateState({ ...pipelineState, mode, phase: 'blocked' }),
+      /phase に blocked は書けません/,
+      `mode=${mode} で blocked が通ってしまう`,
+    );
+  }
+});
+
+test('sync-phase は blocked を受け付けない', () => {
+  // 受理すると進行ラベルを剥がしてしまい、人間が blocked を外したあと
+  // フェーズラベルが無い状態になる。labels add を使わせる。
+  assert.throws(() => syncPhase(1, 'blocked', 'owner/repo'),
+    /blocked は sync-phase で扱いません/);
 });
