@@ -566,17 +566,24 @@ test('手順書が出力上限を自分で渡していない', () => {
     'ask-llm.mjs が tier.max_output_tokens を読んでいない');
 });
 
-test('ループ自身がテストを走らせる手順になっている', () => {
-  // 以前は npm test を指示しているのが CLAUDE.md と docs/SETUP.md だけで、
-  // どちらも人間向けだった。手順書と設定を書き換えるのはループ自身なので、
-  // ループが検査を通さないと、安全装置を壊したことに誰も気づけない。
-  assert.match(SKILL, /npm test/,
-    'SKILL.md が npm test を走らせる手順になっていない');
+test('ループは自分の仕組みを書き換えない', () => {
+  // ループの成果物は projects/<slug>/ に置く。loop/config.json は読むだけで、
+  // loop/ と .claude/ を書き換える手順は存在しない。
+  // だからループ自身が npm test を走らせる必要はない（走らせる手順を置いても発火しない）。
+  // 代わりに「書き換えない」ことを明文化し、仕組みの変更は人間の PR に寄せる。
+  assert.match(SKILL, /`loop\/` と `\.claude\/` を書き換えること/,
+    'ループが自分の仕組みを書き換えることを禁じていない');
+  assert.match(SKILL, /仕組みを変えたくなったら/,
+    '仕組みを変えたいときの出口（needs-human）が書かれていない');
+});
 
-  // CI も無いと、人間がローカルで走らせ忘れたときに素通りする
+test('仕組みの変更は CI が検査する', () => {
+  // 仕組みを変えるのは人間（とこのセッション）で、経路は PR。
+  // CI が無いと、ローカルで npm test を走らせ忘れたときに素通りする。
   const ci = read('.github/workflows/test.yml');
   assert.match(ci, /npm test/, 'CI が npm test を走らせていない');
   assert.match(ci, /pull_request/, 'CI が PR で走らない');
+  assert.match(ci, /push:/, 'CI が push で走らない');
 });
 
 test('テストの実行経路が全テストファイルを拾う', () => {
