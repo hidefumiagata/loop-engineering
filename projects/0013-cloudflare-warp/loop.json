@@ -1,0 +1,53 @@
+{
+  "issue": 13,
+  "usecase": "research",
+  "mode": "pipeline",
+  "slug": "0013-cloudflare-warp",
+  "branch": "claude/loop-13-cloudflare-warp",
+  "phase": "review",
+  "iteration": 1,
+  "max_iterations": 5,
+  "pr": 23,
+  "artifacts": [
+    "report.md",
+    "sources.md"
+  ],
+  "history": [
+    {
+      "n": 1,
+      "kind": "plan",
+      "by": "claude",
+      "at": "2026-10-04",
+      "cost_usd": 0.0007
+    },
+    {
+      "n": 2,
+      "kind": "work",
+      "by": "claude",
+      "at": "2026-10-04",
+      "note": "段階1,2完了。段階3 reconcile が書き込み拒否で blocked"
+    },
+    {
+      "n": 3,
+      "kind": "work",
+      "by": "claude",
+      "at": "2026-10-04",
+      "note": "段階3 reconcile が再度書き込み拒否で blocked"
+    },
+    {
+      "n": 4,
+      "kind": "unblock",
+      "by": "claude（人間の指示により手で訂正）",
+      "at": "2026-10-05",
+      "note": "原因（ハーネスがサブエージェントの report 書き込みを拒否）を PR #20 で解消。phase が blocked のままでは再開先の節が手順書に無いため work に戻す。段階1・2の成果はブランチに残っているので段階3から続く"
+    },
+    {
+      "n": 5,
+      "kind": "work",
+      "by": "claude",
+      "at": "2026-10-05",
+      "note": "段階3 reconcile 完了（テキスト返却→転記）。PR #23 作成"
+    }
+  ],
+  "updated_at": "2026-10-05T15:04:48.649Z"
+}
