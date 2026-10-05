@@ -241,18 +241,47 @@ test('どちらのモードも最後は PR を作って人間に委ねる', () =
   assert.match(skill, /マージはしない/, 'エージェントにマージさせない');
 });
 
-test('PR 本文が Issue を自動クローズする', () => {
-  // Closes が無いと、完了した Issue が open のまま残る。
-  // loop ラベルが付いたままなので、ラベル構成によっては次の run が拾い直してしまう。
+test('PR 本文が Issue を自動クローズする条件を満たしている', () => {
+  // GitHub の仕様（docs: linking-a-pull-request-to-an-issue）が自動クローズに課す条件は3つ。
+  //   1. PR 本文にクローズ用キーワードがある
+  //   2. #<番号> が実際の Issue 番号になっている（プレースホルダのままでは紐付かない）
+  //   3. PR の base がリポジトリの default branch である
+  //      「PR 本文の特別なキーワードは、PR が default branch を対象にしているときにのみ解釈される」
+  // 実測では4件がマージの1秒後に自動クローズされており、仕様どおり機能している。
+  // ここが崩れると、エラーにならずに Issue だけが open のまま残る。
+  // \b を付けてはならない。テンプレート本文は JSON のエスケープされた文字列なので
+  // "\n\nCloses" の直前が文字 n（単語文字）になり、単語境界が成立しない。
+  const KEYWORDS = /(close[sd]?|fix(e[sd])?|resolve[sd]?) #/i;
+
   const bodies = [...SKILL.matchAll(/"body":\s*"([^"]*(?:\\.[^"]*)*)"/g)].map((m) => m[1]);
   const prBodies = bodies.filter((b) => b.includes('projects/<slug>/'));
   assert.ok(prBodies.length >= 2,
     `PR 本文テンプレートが ${prBodies.length} 件しか見つからない。pipeline と panel の両方に必要`);
   for (const b of prBodies) {
-    assert.match(b, /Closes #<issue>/,
-      `PR 本文に Closes #<issue> が無い: ${b.slice(0, 70)}…`);
+    assert.match(b, KEYWORDS, `条件1: PR 本文にクローズ用キーワードが無い: ${b.slice(0, 70)}…`);
   }
-  assert.match(SKILL, /マージ時に Issue が自動でクローズされる/, '理由を手順書に残す');
+
+  // 条件2: プレースホルダのまま出さないことを手順書が明示している
+  assert.match(SKILL, /`<issue>` は実際の番号に置き換える/,
+    '条件2: プレースホルダを実番号に置き換える指示が無い。そのままだと GitHub は紐付けない');
+
+  // 条件3: PR 作成の base が config.defaults.base_branch と一致していること。
+  // ここがずれると keyword が解釈されなくなる（default branch 以外は対象外）
+  const bases = [...SKILL.matchAll(/"base":\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(bases.length >= 2, `PR 作成の base 指定が ${bases.length} 件しか見つからない`);
+  for (const b of bases) {
+    assert.equal(b, config.defaults.base_branch,
+      `条件3: PR の base "${b}" が config.defaults.base_branch "${config.defaults.base_branch}" と違う。`
+      + ' default branch 以外を対象にすると、本文のキーワードは解釈されない');
+  }
+
+  // 非同期であることを手順書に残す。待たずに手で閉じると「効いていない」と誤認する
+  assert.match(SKILL, /クローズは非同期/,
+    '自動クローズが非同期であることが書かれていない');
+
+  // 自前でクローズ処理を書かない（仕様で足りるものを二重実装しない）
+  assert.match(SKILL, /自前で Issue を閉じる処理は書かない/,
+    '仕様に任せる方針が書かれていない');
 });
 
 test('状態コメントが成果物へのリンクを持つ', () => {
