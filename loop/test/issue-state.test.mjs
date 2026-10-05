@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER } from '../bin/issue-state.mjs';
+import { renderStateComment, parseStateComment, validateState, artifactLinks, MARKER, PHASE_LABELS, BLOCKED_LABEL } from '../bin/issue-state.mjs';
 
 const pipelineState = {
   issue: 12,
@@ -128,4 +128,20 @@ test('artifactLinks の組み立て規則', () => {
     + ' · [b.json](https://github.com/o/r/blob/claude/loop-9-x/projects/0009-x/b.json)');
   assert.equal(artifactLinks({ ...s, artifacts: [] }, 'o/r'), null);
   assert.equal(artifactLinks(s, null), null);
+});
+
+test('sync-phase は loop:blocked を勝手に外さない', () => {
+  // loop:blocked は listCandidates が除外に使う制御ラベルであり、人間が外すまで残る必要がある。
+  // PHASE_LABELS に含めると、次の run の sync-phase が「状態は phase: work なのに
+  // loop:blocked が付いている」と見て剥がし、人間が確認していない Issue が再開してしまう。
+  // 実測: Issue #19 が loop:work と loop:blocked の両方を持った状態で滞留した。
+  assert.ok(!PHASE_LABELS.includes(BLOCKED_LABEL),
+    'loop:blocked が PHASE_LABELS に入っている。sync-phase が剥がしてしまう');
+  assert.equal(BLOCKED_LABEL, 'loop:blocked');
+
+  // 進行フェーズは全部入っていること（blocked 以外を落としていない）
+  for (const p of ['plan', 'work', 'review', 'done',
+    'brief', 'propose', 'challenge', 'revise', 'synthesize']) {
+    assert.ok(PHASE_LABELS.includes(`loop:${p}`), `loop:${p} が PHASE_LABELS に無い`);
+  }
 });

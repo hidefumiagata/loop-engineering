@@ -90,11 +90,11 @@ test('全フェーズのラベルが setup-labels.sh にある', () => {
   // ハードコードするとフェーズを増やしたときにずれるので、issue-state.mjs の定義から導出する。
   // syncPhase はこの集合のラベルを付け外しするため、定義が無いと GitHub 側で
   // 既定色のラベルが勝手に作られてしまう。
-  assert.ok(PHASE_LABELS.length >= 10, `PHASE_LABELS の抽出に失敗 (${PHASE_LABELS.length} 件)`);
+  assert.ok(PHASE_LABELS.length >= 9, `PHASE_LABELS の抽出に失敗 (${PHASE_LABELS.length} 件)`);
   for (const label of PHASE_LABELS) {
     assert.ok(LABELS_SH.includes(`${label}|`), `setup-labels.sh に ${label} が無い`);
   }
-  for (const ctl of ['loop|', 'loop:needs-human|', 'loop:go|', 'loop:stop|']) {
+  for (const ctl of ['loop|', 'loop:blocked|', 'loop:needs-human|', 'loop:go|', 'loop:stop|']) {
     assert.ok(LABELS_SH.includes(ctl), `setup-labels.sh に ${ctl.slice(0, -1)} が無い`);
   }
 });
@@ -169,7 +169,14 @@ test('技術調査のサブエージェントが定義され、権限が分離�
   const tools = reconcile.match(/^tools:\s*(.+)$/m)?.[1] ?? '';
   assert.doesNotMatch(tools, /WebSearch|WebFetch/,
     'research-reconcile に Web ツールを与えてはならない。突き合わせ役は追加調査をしない');
-  assert.match(tools, /Write/, 'report.md を書くので Write は要る');
+  // ハーネスがサブエージェントの report ファイル書き込みを拒否する
+  // （Subagents should return findings as text, not write report files）。
+  // Write を持たせても必ず失敗するので、テキストを返す契約にしてある。
+  // 実測: Issue #13 と #19 がこれで2回止まった。
+  assert.doesNotMatch(tools, /Write/,
+    'research-reconcile に Write を与えてはならない。ハーネスが report の書き込みを拒否する');
+  assert.match(reconcile, /テキストで返す/,
+    'レポート本文をテキストで返す契約が書かれていない');
 
   // 公式優先の3規則が書かれていること
   assert.match(reconcile, /公式（非公式と相違）/, '相違時は公式を採りつつ備考に残す');
@@ -443,4 +450,26 @@ test('長文を生成する階層の出力上限が打ち切られない値に�
     assert.ok(n >= 16000,
       `--max-output-tokens ${n} は低すぎる。reasoning_effort: high は推論トークンも出力に数える`);
   }
+});
+
+test('突き合わせ役はテキストを返し、本体は転記するだけという契約が手順書にある', () => {
+  // ハーネスがサブエージェントの report ファイル書き込みを拒否するため
+  // （Subagents should return findings as text, not write report files）、
+  // 「サブエージェントが書く」設計は成立しない。実測で Issue #13 と #19 が2回止まった。
+  // 代わりに本体が転記するが、転記と代行の線引きを文章で縛る必要がある。
+  assert.match(SKILL, /サブエージェントにファイルを書かせない/,
+    'サブエージェントに書かせない明示が無い');
+  assert.match(SKILL, /一字一句変えずに保存する/,
+    '本体が転記するだけである明示が無い');
+  assert.match(SKILL, /編集・要約・追記/,
+    '転記時に内容へ手を入れない明示が無い');
+  assert.match(SKILL, /突き合わせそのものを自分でやってはならない/,
+    '転記は許すが代行は禁じる、という線引きが無い');
+
+  // 用途別指示にも同じ線引きがあること
+  const research = read('loop/prompts/usecases/research.md');
+  assert.match(research, /Subagents should return findings as text/,
+    'research.md に実際のエラー文が残っていない。次に同じ症状を見たとき照合できない');
+  assert.match(research, /転記は代行ではない/,
+    'research.md に転記と代行の線引きが無い');
 });
