@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-10-06T03:03:17.946Z",
+  "generated_by": "loop/bin/synthesis-check.mjs",
+  "note": "このファイルは機械集計の出力です。Claude は参照のみで書き換えません。",
+  "synthesizer": "claude",
+  "element_count": 18,
+  "novel_elements": 1,
+  "attributed_weight": 17,
+  "total_elements": 18,
+  "by_label": [
+    {
+      "label": "B",
+      "author": "openai",
+      "weight": 7.167,
+      "ratio": 0.422,
+      "is_synthesizer": false
+    },
+    {
+      "label": "A",
+      "author": "claude",
+      "weight": 5.667,
+      "ratio": 0.333,
+      "is_synthesizer": true
+    },
+    {
+      "label": "C",
+      "author": "gemini",
+      "weight": 4.167,
+      "ratio": 0.245,
+      "is_synthesizer": false
+    }
+  ],
+  "even_ratio": 0.333,
+  "bias_threshold": 0.533,
+  "warnings": []
+}
