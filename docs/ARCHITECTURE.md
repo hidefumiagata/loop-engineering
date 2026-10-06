@@ -76,12 +76,46 @@ PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue 
 | 階層 | `background` | `max_output_tokens` | 理由 |
 | --- | --- | --- | --- |
 | `openai:propose` | `true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
-| `gemini:propose` | なし | 8000 | 同期。30秒内に返しきる必要がある。16000 にしたら 502 で合議が propose から進めなくなった（Issue #25） |
+| `gemini:propose` | なし | 8000 | 同期。**効いた証拠は無い**（下記）。思考トークンが上限に算入される仕様のため保守的に抑えているだけ |
 
-この非対称を手順書の散文で管理すると必ずずれる。実際に一度ずれて Issue #25 を止めた。
-だから数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、
-`ask-llm.mjs` がそこから読む。手順書は `--max-output-tokens` を渡さない。
-wiring テストが「`background` の無い階層は 8000 以下」を強制する。
+数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、`ask-llm.mjs` がそこから読む。
+手順書は `--max-output-tokens` を渡さない。二重管理をやめること自体は正しい。
+
+> **★ 未解決: `gemini:propose` の 502 の原因は特定できていない。**
+>
+> 当初「上限 16000 が原因」と判断して 8000 に下げたが、**これは誤りだった**。
+> git から各呼び出し時点の上限を復元して照合した結果:
+>
+> | 上限 | 成功 | 失敗 |
+> | --- | --- | --- |
+> | 8000 | #10 propose（4,861）/ #10 revise（6,315） | #32 propose |
+> | 16000 | #4 / #10 challenge / #25 propose再試行（5,914）/ #25 challenge | #25 propose / #25 revise |
+>
+> **どちらの値でも成功と失敗の両方がある。上限は判別変数ではない。**
+> しかも成功8件すべて `truncated: false` で最大 6,315 トークン —
+> **上限に一度も到達していない**ので、16000→8000 は観測可能な差を生まない。
+>
+> 分かっていること:
+> - 落ちるのは長い生成（propose / revise、4,800〜6,300トークン）だけ。
+>   短い生成（`gemini:review`、300〜700トークン）は14/14成功
+> - 失敗は常に 30〜31秒かかってから 502
+> - **同一 run 内の再試行は 20 試行すべて失敗**し、通ったのは次の run（約7時間後）。
+>   独立試行ではなく時間的に相関している
+>
+> 分かっていないこと:
+> - 壁が「応答開始まで」の制限か「リクエスト全体」の制限か
+>   → `elapsed_sec` を記録していなかったため、**30秒を超えて成功した記録が1件も無い**
+> - 壁が Anthropic のプロキシ側かプロバイダ側か（公式ドキュメントに記述が無い）
+> - `thinkingConfig` 未設定（`gemini-3.8-flash` は thinking がデフォルト ON、level=medium。
+>   思考トークンは上限に算入される）がどれだけ所要時間に効いているか
+>
+> **次の一手は計測である。** `node loop/bin/doctor.mjs --latency` が
+> 本番と同じ長さの生成を n 回投げて所要時間と 502 率を表で出す。
+> 成功で30秒超が1件でも出れば「総所要の制限」説は否定され、ストリーミングが選択肢になる。
+> 全て28秒未満で失敗が30秒前後なら総所要の制限が濃厚で、生成を短くするしかない。
+>
+> **上限 8000 は据え置いている。** 効いた証拠は無いが、思考トークンが上限に算入される仕様上
+> 下げ方向が安全側ではあるため、計測結果を見てから判断する。
 
 ## なぜ GitHub Actions ではないのか
 
@@ -130,7 +164,7 @@ wiring テストが「`background` の無い階層は 8000 以下」を強制す
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
-| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ちた。Gemini Flash は当初成功していたが、出力上限を 8000→16000 に上げた途端 502 になった（Issue #25）。**モデルではなく生成の長さが効く** | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
+| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 実測だが**公式ドキュメントに記述が無く、壁が Anthropic 側かプロバイダ側かも未特定**。長い生成（4,800〜6,300トークン）だけが落ち、短い生成（300〜700トークン）は14/14成功。**上限は判別変数ではない**（8000 でも 16000 でも成功と失敗の両方がある） | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
 | **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを無視する**（`NODE_USE_ENV_PROXY` は Node 24 以降、サンドボックスは Node 22） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
 | **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
 | **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |
