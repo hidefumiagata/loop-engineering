@@ -22,7 +22,12 @@
 // ★ キーの値は絶対に出力しない。環境変数も「設定されているか」だけを見る。
 
 import { execFileSync } from 'node:child_process';
-import { loadConfig } from './ask-llm.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadConfig, resolveTier, askLLM } from './ask-llm.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const line = (s = '') => process.stdout.write(s + '\n');
 
@@ -159,10 +164,114 @@ function listModels(config) {
   line('この出力にキーの値は含まれていません。そのまま貼って共有して構いません。');
 }
 
+/**
+ * 本番と同じ長さの生成を n 回投げて、所要時間と 502 率を測る。
+ *
+ *   node loop/bin/doctor.mjs --latency [--spec gemini:propose] [--n 10] [--input <file>]
+ *
+ * なぜ必要か:
+ *   「約30秒の壁」に当たっているかどうかは、所要時間を測らないと分からない。
+ *   organic な panel run を待つと1時間に1点しか取れず、しかも propose / revise の
+ *   ときだけなので、「502 が出なかった」が効果なのか偶然なのかを区別できない。
+ *   実際にそれで3回判断を誤った。ここで一度に複数点を取る。
+ *
+ * 判定の仕方:
+ *   - 成功の所要が30秒を超える回があれば、壁は「総所要の制限」ではない
+ *     → ストリーミングで越えられる可能性がある
+ *   - 成功が全て28秒未満で失敗が全て30〜31秒なら、総所要の制限が濃厚
+ *   - 502 が0件なら、パラメータではなく時間相関の外部要因
+ */
+async function measureLatency(config) {
+  const argOf = (name, dflt) => {
+    const i = process.argv.indexOf(name);
+    return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
+  };
+  const spec = argOf('--spec', 'gemini:propose');
+  const n = Math.max(1, Math.min(30, Number(argOf('--n', '6'))));
+  const inputPath = argOf('--input', null);
+
+  // ★ ドライランでは測れない。LLM を呼ばないので所要0秒・502なしになり、
+  //   「パラメータではなく外部要因」という誤った判定を出してしまう。
+  if (process.env.LOOP_DRY_RUN === '1') {
+    line('# 所要時間の実測');
+    line('');
+    line('LOOP_DRY_RUN=1 では測定できません（LLM を呼ばないため所要0秒になります）。');
+    line('配線の確認だけなら以下が解決できていれば十分です:');
+    const { tier: t } = resolveTier(spec, config);
+    line(`  spec=${spec} → ${t.model} / max_output_tokens=${t.max_output_tokens ?? '(既定)'}`);
+    line('実測するには LOOP_DRY_RUN を外して、credential のあるクラウドの run で実行してください。');
+    return;
+  }
+
+  const { tier } = resolveTier(spec, config);
+  const input = inputPath
+    ? readFileSync(inputPath, 'utf8')
+    // 本番の提案生成に近い長さの出力を要求する。入力が無いときの既定
+    : 'あなたは技術的な提案を書きます。題材は「社内の勉強会を継続させる仕組み」です。\n'
+      + '要旨・設計・トレードオフ・失敗モード・前提の5節で、本文 1200〜2500 語程度で書いてください。';
+  const system = readFileSync(resolve(HERE, '..', 'prompts', 'roles', 'proposer.md'), 'utf8');
+
+  line('# 所要時間の実測');
+  line('');
+  line(`spec: ${spec} (${tier.model})  n=${n}  入力 ${input.length} 文字`);
+  line(`max_output_tokens: ${tier.max_output_tokens ?? '(既定)'}`);
+  line('');
+  line('| # | 結果 | 所要秒 | out | thoughts | truncated | 備考 |');
+  line('| --- | --- | --- | --- | --- | --- | --- |');
+
+  const rows = [];
+  for (let i = 1; i <= n; i++) {
+    const t0 = Date.now();
+    try {
+      const r = await askLLM({ spec, system, input, config, log: () => {} });
+      const sec = r.elapsed_sec ?? Math.round((Date.now() - t0) / 1000);
+      rows.push({ ok: true, sec, out: r.usage.output_tokens, th: r.usage.thoughts_tokens, tr: r.truncated });
+      line(`| ${i} | OK | ${sec} | ${r.usage.output_tokens} | ${r.usage.thoughts_tokens ?? '-'} | ${r.truncated} | attempts=${r.attempts} |`);
+    } catch (e) {
+      const d = e.detail ?? {};
+      const sec = d.elapsed_sec ?? Math.round((Date.now() - t0) / 1000);
+      rows.push({ ok: false, sec, status: d.http_status });
+      line(`| ${i} | **失敗** | ${sec} | - | - | - | HTTP ${d.http_status ?? '?'} ${String(e.message).split('\n')[0].slice(0, 60)} |`);
+    }
+  }
+
+  const ok = rows.filter((r) => r.ok);
+  // 時間の壁に当たった失敗だけを数える。403（credential）や 404（モデル名）は別問題で、
+  // これを壁の判定に混ぜると「総所要の制限が濃厚」と誤読する
+  const ng = rows.filter((r) => !r.ok && (r.status === 502 || r.status === 504) && r.sec >= 25);
+  const other = rows.filter((r) => !r.ok && !ng.includes(r));
+  const maxOk = ok.length ? Math.max(...ok.map((r) => r.sec)) : null;
+  line('');
+  line(`成功 ${ok.length}/${rows.length}  時間の壁による失敗 ${ng.length}/${rows.length}`
+    + (other.length ? `  その他の失敗 ${other.length}/${rows.length}` : ''));
+  if (ok.length) line(`成功の所要: 最小 ${Math.min(...ok.map((r) => r.sec))}秒 / 最大 ${maxOk}秒`);
+  if (ng.length) line(`壁による失敗の所要: 最小 ${Math.min(...ng.map((r) => r.sec))}秒 / 最大 ${Math.max(...ng.map((r) => r.sec))}秒`);
+  line('');
+  line('## 判定');
+  if (other.length === rows.length) {
+    line(`  全件が時間の壁とは別の理由で失敗している（HTTP ${[...new Set(other.map((r) => r.status))].join(', ')}）。`);
+    line('  → 壁の判定はできない。まず node loop/bin/doctor.mjs（引数なし）で credential を切り分けること。');
+  } else if (!ng.length && !ok.length) {
+    line('  成功も壁による失敗も無い。測定不能。');
+  } else if (!ng.length) {
+    line('  時間の壁による失敗が0件。パラメータではなく時間相関の外部要因が疑わしい。');
+    line('  → プロバイダ設定は触らず、502 を即座に諦めて次の run に再試行させる形で十分。');
+  } else if (maxOk != null && maxOk > 30) {
+    line(`  成功で ${maxOk} 秒かかった回がある。**壁は「総所要の制限」ではない。**`);
+    line('  → ストリーミング（:streamGenerateContent?alt=sse）で越えられる可能性がある。');
+  } else {
+    line('  成功が全て30秒未満で、失敗が30秒前後。**総所要の制限が濃厚。**');
+    line('  → ストリーミングでは越えられない。生成を短くする（thinkingLevel 等）か非同期経路を使う。');
+  }
+  line('');
+  line('この出力にキーの値は含まれていません。そのまま貼って共有して構いません。');
+}
+
 async function main() {
   const config = loadConfig();
 
   if (process.argv.includes('--models')) { listModels(config); return; }
+  if (process.argv.includes('--latency')) { await measureLatency(config); return; }
 
   line('# loop-engineering 疎通診断');
   line('');

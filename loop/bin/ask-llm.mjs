@@ -130,7 +130,7 @@ function buildRequest({ providerName, provider, tier, system, input, schema, max
   throw new Error(`リクエスト構築が未実装のプロバイダ: ${providerName}`);
 }
 
-function extractGemini(json) {
+export function extractGemini(json) {
   const cand = json.candidates?.[0];
   if (!cand) throw new Error(`Gemini が候補を返しませんでした: ${JSON.stringify(json).slice(0, 400)}`);
   if (cand.finishReason && !['STOP', 'MAX_TOKENS'].includes(cand.finishReason)) {
@@ -138,12 +138,32 @@ function extractGemini(json) {
   }
   const text = (cand.content?.parts ?? []).map((p) => p.text ?? '').join('');
   const u = json.usageMetadata ?? {};
+  const thoughts = u.thoughtsTokenCount ?? 0;
+  const candidates = u.candidatesTokenCount ?? 0;
+
+  // ★ 空の応答を成功として返してはならない。
+  //   Gemini は thinking がデフォルトで有効（gemini-3.8-flash は level=medium）で、
+  //   思考トークンは maxOutputTokens に算入される（公式ドキュメント記載）。
+  //   つまり思考が予算を食い切ると finishReason=MAX_TOKENS かつ本文が空になりうる。
+  //   以前はこれを正常系として返していたため、空の proposals/*.md が合議に入る余地があった
+  //   （schema 付きの呼び出しは JSON.parse('') が投げるので守られていたが、提案文は無防備）。
+  if (!text.trim()) {
+    const why = cand.finishReason === 'MAX_TOKENS'
+      ? `思考トークン ${thoughts} が maxOutputTokens を使い切り、本文が生成されませんでした。`
+        + ' thinkingLevel を下げるか maxOutputTokens を上げてください。'
+      : `finishReason=${cand.finishReason ?? '(なし)'} で本文が空でした。`;
+    throw new Error(`Gemini が空の応答を返しました。${why}`);
+  }
+
   return {
     text,
     truncated: cand.finishReason === 'MAX_TOKENS',
     usage: {
       input_tokens: u.promptTokenCount ?? 0,
-      output_tokens: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+      // 価格は思考トークンも課金対象なので合算が正。ただし内訳も残す（下の *_tokens）
+      output_tokens: candidates + thoughts,
+      candidates_tokens: candidates,
+      thoughts_tokens: thoughts,
     },
   };
 }
@@ -415,11 +435,21 @@ export async function askLLM({
           throw new Error(`${providerName}:${tierName} が構造化出力を返しませんでした。先頭200文字: ${out.text.slice(0, 200)}`);
         }
       }
-      log(`[cost] ${providerName}:${tierName} ${tier.model} in=${out.usage.input_tokens} out=${out.usage.output_tokens} = USD ${cost.toFixed(4)} (auth=${mode})`);
+      // ★ 所要時間を成功時にも残す。以前は失敗パスでしか計算しておらず、
+      //   「30秒を超えて成功した呼び出し」の記録が1件も無かった。
+      //   そのため「約30秒の壁」が応答開始までの制限なのか総所要の制限なのかを
+      //   誰も判定できず、同じ 502 を3回調べて3回違う結論を出すことになった。
+      const elapsedOk = Math.round((Date.now() - startedAt) / 1000);
+      const thoughts = out.usage.thoughts_tokens;
+      log(`[cost] ${providerName}:${tierName} ${tier.model}`
+        + ` in=${out.usage.input_tokens} out=${out.usage.output_tokens}`
+        + (thoughts != null ? ` (thoughts=${thoughts})` : '')
+        + ` ${elapsedOk}秒 attempts=${attempt} = USD ${cost.toFixed(4)} (auth=${mode})`);
       if (out.truncated) log(`[warn] 出力が maxOutputTokens(${maxOutputTokens}) で打ち切られた可能性があります`);
       return {
         providerName, tierName, model: tier.model, text: out.text, parsed,
         usage: out.usage, cost_usd: cost, truncated: out.truncated,
+        elapsed_sec: elapsedOk, attempts: attempt, max_output_tokens: maxOutputTokens,
       };
     }
 
@@ -428,13 +458,27 @@ export async function askLLM({
     // 所要時間は 502/504 の切り分けに効く。長考がゲートウェイのタイムアウトに
     // 当たっているのか、即座に蹴られているのかはこの数字でしか分からない。
     lastErr = new Error(`HTTP ${res.status} (${elapsed}秒): ${bodyText.slice(0, 500)}`);
-    // 実測では 30 秒ちょうどで 502 "upstream request failed" が返った（プロキシ側のメッセージ）。
-    if ((res.status === 502 || res.status === 504) && elapsed >= 25) {
+    lastErr.detail = {
+      http_status: res.status, elapsed_sec: elapsed, attempts: attempt,
+      max_output_tokens: maxOutputTokens,
+      body: bodyText.slice(0, 2000),
+      // 502 の発生元の切り分けに効くヘッダだけ残す
+      headers: Object.fromEntries(['server', 'via', 'x-deny-reason', 'retry-after']
+        .map((h) => [h, res.headers.get(h)]).filter(([, v]) => v)),
+    };
+
+    // 長い生成が原因の 502/504 は、同じリクエストを再試行しても同じ時間をかけて同じように落ちる。
+    // 実測: 同一 run 内の再試行は 20 試行すべて失敗し、通ったのは次の run（約7時間後）だった。
+    // 1 invocation に約138秒（4試行×31秒＋待機14秒）かけても成功機構が無いので、即座に諦める。
+    const slowGateway = (res.status === 502 || res.status === 504) && elapsed >= 25;
+    if (slowGateway) {
       lastErr.message += `\n[診断] 応答までに ${elapsed} 秒かかってから ${res.status} になりました。`
-        + 'エージェントプロキシは約30秒で諦めるため、長い生成は同期リクエストでは通りません。'
-        + 'loop/config.json の該当階層に background: true を付けて非同期化してください。'
-        + '（reasoning_effort を下げるだけでは、生成そのものが長い場合に足りません。'
-        + 'background に対応していないプロバイダなら max_output_tokens を減らすしかありません。）';
+        + '長い生成が時間の壁に当たっています（このリポジトリでの実測は約30秒。'
+        + 'ただし壁が Anthropic のプロキシ側なのかプロバイダ側なのかは未特定で、公式の記述もありません）。'
+        + '**同一リクエストの再試行は行いません。** 同じ時間をかけて同じように落ちるためです。'
+        + '次の run で再試行するか、生成を短くしてください'
+        + '（Gemini なら thinkingLevel、OpenAI なら background: true / reasoning_effort）。'
+        + ' 切り分けには node loop/bin/doctor.mjs --latency を使ってください。';
     }
 
     const diag = diagnose(res, bodyText, provider, mode);
@@ -442,6 +486,7 @@ export async function askLLM({
       lastErr.message += `\n${diag}`;
       break;   // 設定起因なので再試行しても直らない
     }
+    if (slowGateway) break;   // ★ 上の診断どおり、再試行しない
     if (!RETRY_STATUS.has(res.status) || attempt === MAX_ATTEMPTS) break;
 
     const retryAfter = Number(res.headers.get('retry-after'));
@@ -499,7 +544,29 @@ async function main() {
   const maxOutputTokens = args.max_output_tokens ? Number(args.max_output_tokens) : null;
   const maxWaitSec = args.max_wait ? Number(args.max_wait) : 420;
 
-  const r = await askLLM({ spec, system, input, schema, maxOutputTokens, maxWaitSec });
+  let r;
+  try {
+    r = await askLLM({ spec, system, input, schema, maxOutputTokens, maxWaitSec });
+  } catch (e) {
+    // ★ 失敗時にも機械可読な記録を残す。
+    //   以前は失敗すると一切ファイルを書かず、残るのは Claude が書いた散文の journal だけだった。
+    //   その結果、20回の 502 について機械の記録がゼロになり、
+    //   「存在しなかった設定値」が journal に書かれて次の判断を誤らせた。
+    //   何が起きたかを後から検証できる形で残すのが、この記録の目的である。
+    if (process.env.LOOP_DRY_RUN !== '1') {
+      try {
+        writeFileSync(`${args.out}.error.json`, `${JSON.stringify({
+          provider: spec.split(':')[0], tier: spec.split(':')[1], schema,
+          error: e.message,
+          ...(e.detail ?? {}),
+          requested_max_output_tokens: maxOutputTokens,
+          at: new Date().toISOString(),
+        }, null, 2)}\n`, 'utf8');
+        process.stderr.write(`[error] 失敗の記録を ${args.out}.error.json に書きました\n`);
+      } catch { /* 記録に失敗しても元の例外を潰さない */ }
+    }
+    throw e;
+  }
 
   // ★ ドライランでは一切書き込まない。
   //   ここで書くと、既にある成果物がプレースホルダに、既にある *.meta.json が
@@ -516,6 +583,11 @@ async function main() {
     provider: r.providerName, tier: r.tierName, model: r.model,
     schema, usage: r.usage, cost_usd: r.cost_usd,
     truncated: r.truncated ?? false, dry_run: r.dryRun ?? false,
+    // ★ 計測。これが無いと「上限を変えたら直った」のような主張を検証できない。
+    //   elapsed_sec は壁が応答開始までの制限か総所要の制限かを判定する唯一の材料。
+    elapsed_sec: r.elapsed_sec ?? null,
+    attempts: r.attempts ?? null,
+    max_output_tokens: r.max_output_tokens ?? maxOutputTokens,
     at: new Date().toISOString(),
   }, null, 2) + '\n', 'utf8');
   process.stderr.write(`[ok] ${args.out} に書き込みました\n`);
