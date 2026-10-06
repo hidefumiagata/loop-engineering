@@ -179,7 +179,7 @@ function listModels(config) {
  *   壁は「最初のバイトまで約30秒」で、総所要の制限ではない（実測で確定。ストリーミングで
  *   137〜182秒の生成が 7/7 成功した）。だから所要と最初のバイトまでの秒数を分けて出す。
  *   - 失敗の最初のバイトが30秒前後 → 壁に当たっている。非ストリーミングなら stream: true、
- *     ストリーミングなら thinking_level を下げる（思考中は1バイトも流れない）
+ *     ストリーミングなら思考が長すぎた（思考中は1バイトも流れない）
  *   - 502 が0件なら、パラメータではなく時間相関の外部要因
  *
  *   ★ 以前の判定は非ストリーミングしか測らずに「成功が全て30秒未満なら総所要の制限が濃厚」と
@@ -225,8 +225,7 @@ async function measureLatency(config) {
   line('# 所要時間の実測');
   line('');
   line(`spec: ${spec} (${tier.model})  n=${n}  入力 ${input.length} 文字`);
-  line(`max_output_tokens: ${tier.max_output_tokens ?? '(既定)'}  stream: ${tier.stream === true}`
-    + `  thinking_level: ${tier.thinking_level ?? '(既定)'}`);
+  line(`max_output_tokens: ${tier.max_output_tokens ?? '(既定)'}  stream: ${tier.stream === true}`);
   line('');
   line('| # | 結果 | 最初のバイト秒 | 所要秒 | out | thoughts | truncated | 備考 |');
   line('| --- | --- | --- | --- | --- | --- | --- | --- |');
@@ -276,7 +275,7 @@ async function measureLatency(config) {
       + '30秒前後なら壁、短ければプロキシかプロバイダ側の一時的な障害。');
   } else if (tier.stream) {
     line('  ストリーミングでも最初のバイトが約30秒届かずに落ちた回がある。思考中は1バイトも流れないため。');
-    line('  → loop/config.json の該当階層の thinking_level を "low" にする（実測: 最初のバイトまで 1.9〜4.0秒）。');
+    line('  → 頻発するなら、最初のバイトまでの秒数の分布を見て対策を検討する（実測: 既定 thinking で 12.8〜27.5秒）。');
   } else {
     line('  非ストリーミングでは全文を生成し終えるまで最初のバイトが返らないので、生成が30秒を越えると落ちる。');
     line('  （この観測だけでは総所要の制限と区別できないが、ストリーミングで30秒超の成功が実測済み）');

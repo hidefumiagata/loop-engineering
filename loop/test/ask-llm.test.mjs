@@ -190,7 +190,7 @@ test('本文が空なら例外になる（MAX_TOKENS で思考が予算を食い
     extractGemini(geminiResponse({ text: '', finishReason: 'MAX_TOKENS', thoughts: 8000, candidates: 0 }));
   } catch (e) {
     assert.match(e.message, /思考トークン 8000/, '思考トークン数が出ない');
-    assert.match(e.message, /thinking_level/, '対処が示されていない');
+    assert.match(e.message, /max_output_tokens/, '対処が示されていない');
   }
 });
 
@@ -313,18 +313,9 @@ test('stream: true の Gemini 階層は SSE のエンドポイントに投げる
   assert.match(plain.url, /\/models\/m:generateContent$/);
 });
 
-test('thinking_level が thinkingConfig に入る', () => {
-  // 思考中は1バイトも流れないので、ストリーミングでも思考が長いと最初のバイトが30秒を越える
-  assert.deepEqual(req({ model: 'm', stream: true, thinking_level: 'low' }).body.generationConfig.thinkingConfig,
-    { thinkingLevel: 'low' });
-  assert.equal(req({ model: 'm' }).body.generationConfig.thinkingConfig, undefined);
-});
-
-test('gemini:propose はストリーミングかつ思考を抑えている', () => {
-  // どちらを外しても propose が 502 に戻る
+test('gemini:propose はストリーミングで呼ぶ', () => {
   const t = config.providers.gemini.tiers.propose;
   assert.equal(t.stream, true, 'stream を外すと生成が30秒を越えた時点で 502 になる');
-  assert.equal(t.thinking_level, 'low', '既定の thinking だと最初のバイトまで 12.8〜27.5秒とばらつき、30秒を越えうる');
 });
 
 test('SSE のチャンクを1つの応答に畳む', () => {

@@ -77,7 +77,7 @@ PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue 
 | 階層 | 呼び方 | `max_output_tokens` | 理由 |
 | --- | --- | --- | --- |
 | `openai:propose` | `background: true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
-| `gemini:propose` | `stream: true` + `thinking_level: low` | 16000 | 最初のチャンクでヘッダが返るので長くてよい。思考中は1バイトも流れないため thinking を抑える |
+| `gemini:propose` | `stream: true` | 16000 | 最初のチャンクでヘッダが返るので長くてよい |
 | `gemini:review` | `stream: true` | 8000 | 短い生成なので壁には当たらないが、揃えておく |
 
 数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、`ask-llm.mjs` がそこから読む。
@@ -104,6 +104,9 @@ PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue 
 > - 一般のホスト（httpbin）ではヘッダまで35秒待っても切れなかった。**壁は credential を付与する経路に固有**とみられる。
 > - ヘッダ受信後の無通信上限は Gemini 経路では未検証（最大無通信は3.2秒しか作れなかった）。
 > - `thinkingLevel: minimal` は `gemini-3.8-flash` では 400 になる。
+> - **残るリスク:** 思考中は1バイトも流れないので、既定の thinking では最初のバイトまで 12.8〜27.5秒かかり、
+>   30秒を越えて 502 になった回が1回あった。thinking は品質に関わるので既定のままにしている。
+>   頻発するようなら `*.error.json` の `ttfb_sec` を集めて対策を検討する。
 >
 > **切り分けは `node loop/bin/doctor.mjs --latency` で行う。** 最初のバイトまでの秒数と総所要を分けて出す。
 > `--no-stream` で旧方式と比較できる。`ask-llm.mjs` も `*.meta.json` / `*.error.json` に `ttfb_sec` を残す。
@@ -155,7 +158,7 @@ PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue 
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
-| **エージェントプロキシは応答ヘッダ（最初のバイト）を約30秒待って届かないと 502 `upstream request failed` を返す。総所要の制限ではない** | 実測（公式ドキュメントに記述は無い）。502 の本文と欠けているヘッダからプロキシ側の生成と判断。ストリーミングでは 182秒の生成も通った（前述） | `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。Gemini は `stream: true`（SSE）で最初のチャンクを早く返し、`thinking_level: low` で思考中の無応答を短くする |
+| **エージェントプロキシは応答ヘッダ（最初のバイト）を約30秒待って届かないと 502 `upstream request failed` を返す。総所要の制限ではない** | 実測（公式ドキュメントに記述は無い）。502 の本文と欠けているヘッダからプロキシ側の生成と判断。ストリーミングでは 182秒の生成も通った（前述） | `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。Gemini は `stream: true`（SSE）で最初のチャンクを早く返し |
 | **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを既定で無視する**（`NODE_USE_ENV_PROXY=1` を付ければ Node 22.21 以降は見るが、付け忘れが黙ってキー無しのリクエストになる） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
 | **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
 | **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |

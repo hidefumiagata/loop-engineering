@@ -109,9 +109,6 @@ export function buildRequest({ providerName, provider, tier, system, input, sche
       generationConfig.responseMimeType = 'application/json';
       generationConfig.responseSchema = toGeminiSchema(schema);
     }
-    // 思考中は1バイトも流れないので、思考が長いとストリーミングでも最初のバイトが30秒を越えて 502 になる。
-    // 実測（既定 thinking）: 最初のバイトまで 12.8〜27.5秒とばらついた。low なら 1.9〜4.0秒。
-    if (tier.thinking_level) generationConfig.thinkingConfig = { thinkingLevel: tier.thinking_level };
     if (tier.stream) {
       if (!url.includes(':generateContent')) {
         throw new Error(`stream: true ですが endpoint が :generateContent を含みません (${provider.endpoint})。`
@@ -220,7 +217,7 @@ export function extractGemini(json) {
   if (!text.trim()) {
     const why = cand.finishReason === 'MAX_TOKENS'
       ? `思考トークン ${thoughts} が maxOutputTokens を使い切り、本文が生成されませんでした。`
-        + ' loop/config.json の該当階層で thinking_level を下げるか max_output_tokens を上げてください。'
+        + ' loop/config.json の該当階層の max_output_tokens を上げてください。'
       : `finishReason=${cand.finishReason ?? '(なし)'} で本文が空でした。`;
     throw new Error(`Gemini が空の応答を返しました。${why}`);
   }
@@ -564,8 +561,8 @@ export async function askLLM({
         + '**同一リクエストの再試行は行いません。** 同じ時間をかけて同じように落ちるためです。'
         + (providerName === 'gemini'
           ? (stream
-            ? ' ストリーミングでも思考中は1バイトも流れないので、loop/config.json の該当階層の'
-              + ' thinking_level を "low" にしてください（実測: 最初のバイトまで 1.9〜4.0秒）。'
+            ? ' ストリーミングでも思考中は1バイトも流れないため、思考が長いと最初のチャンクが30秒に間に合いません'
+              + '（実測: 既定の thinking で最初のバイトまで 12.8〜27.5秒）。次の run で再試行してください。'
             : ' loop/config.json の該当階層に stream: true を付けてください（最初のチャンクでヘッダが返るので壁に当たらない）。')
           : ' loop/config.json の該当階層に background: true を付けるか、reasoning_effort を下げてください。')
         + ' 切り分けには node loop/bin/doctor.mjs --latency を使ってください。';
