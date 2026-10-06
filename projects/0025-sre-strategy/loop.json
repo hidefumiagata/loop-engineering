@@ -1,0 +1,12 @@
+{
+  "issue": 25,
+  "mode": "panel",
+  "usecase": "deliberation",
+  "slug": "0025-sre-strategy",
+  "branch": "claude/loop-25-sre-strategy",
+  "phase": "done",
+  "iteration": 1,
+  "panel_round": 1,
+  "max_iterations": 5,
+  "awaiting_human": false
+}
