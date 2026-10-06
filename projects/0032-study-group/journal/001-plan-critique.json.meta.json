@@ -1,0 +1,14 @@
+{
+  "provider": "gemini",
+  "tier": "review",
+  "model": "gemini-3.1-flash-lite",
+  "schema": "critique",
+  "usage": {
+    "input_tokens": 979,
+    "output_tokens": 317
+  },
+  "cost_usd": 0.00072,
+  "truncated": false,
+  "dry_run": false,
+  "at": "2026-10-06T12:26:11.375Z"
+}
