@@ -36,7 +36,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 | 入力 | GitHub Issue（`loop` ラベル） | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **マージを1回試す**（拒否されたら人間へ） |
+| PR | 人間がマージする | 人間がマージする（**マージ API を呼ばない**） |
 | 許可ツール | + `Agent`（調査のサブエージェント） | Web と git だけ |
 
 **分けた理由**: 定期ジョブには「目的を達成したか」という判定が無い。
@@ -47,27 +47,27 @@ Claude Cloud Routine "loop-engine" ───────────────
 定期ジョブは Issue を**作らない・触らない・コメントしない**。
 PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue を閉じてしまうため）。
 
-### daily-jobs のマージは「1回試して、駄目なら記録して人間へ」
+### daily-jobs はマージしない。PR を作って人間に渡す
 
 | 事実 | 出典 |
 | --- | --- |
-| PR #27 のマージは**ハーネスが拒否した**。Claude Code の auto-mode 権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める | `daily/_log/2026-10-06.md` の「マージ結果」節（run が自分で記録した） |
-| PR #17 も未マージで残ったが、**理由は記録が無く分かっていない**。ログ追記の手順がまだ無かった | `daily/_log/2026-10-05.md` にマージに関する記述が無い。最終的に人間が手でマージした |
-| `permissions.allow` では緩和できない | 拒否理由が「レビューが無い」であり、ツールの許可不足ではない |
-| GitHub 側の auto-merge は代わりにならない | 前提のブランチ保護と必須チェックを有効化できない。private かつ無料プランのため `GET /branches/main/protection` が 403 `Upgrade to GitHub Pro` |
+| 自動マージは**3回の run すべてでハーネスが拒否した**（PR #17・#27・#34）。Claude Code の auto モードの権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める | 各 run のセッション記録（`permission_denied` / `decision_reason_type: classifier`）、PR #17 の本文、`daily/_log/2026-10-06.md` |
+| 判定条件は **人間の approve が無い PR のマージ**。protected branch かどうかは見ていない（このリポジトリの `main` は保護無しで、PR #34 は `mergeable_state: clean` だった） | [permission-modes](https://code.claude.com/docs/en/permission-modes)「Merging a pull request no human has approved, approving Claude's own pull request, or disabling CI checks」 |
+| routine には権限モードを選ぶ手段が無く、auto モードで動く | [routines](https://code.claude.com/docs/en/routines)「there is no permission-mode picker」。セッションのタグ `routine:auto-mode-forced` |
+| 過去の daily PR（#17・#27・#34）はすべて人間が手でマージした | GitHub の merged_at が run 終了の数時間後 |
+| GitHub 側の auto-merge は代わりにならない | private かつ無料プランのためブランチ保護を有効化できない（`GET /branches/main/protection` が 403 `Upgrade to GitHub Pro`） |
 
-**拒否が確認できているのは1件だけ**なので、「必ず拒否される」とは言えない。
-一方で権限判定は決定的なので、拒否された同じ呼び出しを**再試行しても結果は変わらない**。
-衝突（`mergeable: false`）も再試行では直らない。
+「PR を作ってすぐ自分でマージする」は、分類器の判定条件にそのまま当たる。
+呼び出しを残すと実害もあった。PR 作成と merge を1回の Bash にまとめた run では PR 作成ごと拒否された（PR #34）。
 
-そこで **1回だけ試し、結果を必ずログに記録する**設計にした。
+そこで **daily-jobs はマージ API を呼ばず、PR を作って通知するところで終える**。loop-engine と同じ扱いである。
 
-- 通れば自動で入る。権限の状況が変われば、手順を直さずにそのまま通るようになる
-- 通らなければ1 API 呼び出しの損で済み、**理由が `daily/_log/` に残る**
-- 再試行はしない。run とトークン枠を無駄にするだけである
-
-この「結果を記録する」部分が実際に効いた。PR #17 のときは記録が無かったので
-未マージの理由が分からず、PR #27 では記録があったので一度で原因が特定できた。
+> 以前は「拒否が確認できたのは PR #27 の1件だけで、PR #17 の理由は分からない」として
+> 「1回だけ試す」設計にしていたが、PR #17 の拒否も記録に残っており、前提が誤っていた。
+>
+> 自動マージに戻すなら、分類器の判定を `autoMode` 設定で例外にする必要がある
+> （[auto-mode-config](https://code.claude.com/docs/en/auto-mode-config)）。安全装置を意図的に緩める判断であり、
+> routine でその設定が効くかも未確認なので、エージェントの判断ではやらない。
 
 ### 出力上限は階層ごとの制約として config に持つ
 
