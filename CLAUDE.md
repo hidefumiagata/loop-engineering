@@ -58,7 +58,7 @@ draft PR を作らないのも同じ理由。`draft → ready` の遷移は Grap
 **`ask-llm.mjs` の内部転送は curl である。Node の `fetch` に戻してはならない。**
 サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、
 API credential のキーはそのプロキシが付与する。Node の `fetch`（undici）は
-`HTTPS_PROXY` を既定で無視するため（`NODE_USE_ENV_PROXY` は Node 24 以降・サンドボックスは Node 22）、
+`HTTPS_PROXY` を既定で無視するため（`NODE_USE_ENV_PROXY=1` を付ければ Node 22.21 以降は見るが、付け忘れが黙って事故になる）、
 プロキシを素通りしてキーの付かないリクエストがプロバイダに届く。
 実測で、同一リクエストが curl では 200、Node fetch では 403/401 になった。
 wiring テストがこの退行を検出する。

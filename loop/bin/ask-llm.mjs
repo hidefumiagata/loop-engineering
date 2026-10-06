@@ -56,16 +56,23 @@ export function resolveTier(spec, config = loadConfig()) {
 /** `background: true` を実装しているプロバイダ。buildRequest がこれしか見ていない */
 export const ASYNC_PROVIDERS = ['openai'];
 
-/** 同期呼び出しが約30秒のプロキシ制限内に返しきれる上限 */
+/** `stream: true`（SSE）を実装しているプロバイダ。buildRequest がこれしか見ていない */
+export const STREAM_PROVIDERS = ['gemini'];
+
+/** 階層に max_output_tokens が無いときの既定値 */
 export const SYNC_MAX_OUTPUT_TOKENS = 8000;
 
 /**
  * 出力上限を決める。**階層ごとの制約なので config が正。** 純関数。
  *
- * 同期呼び出し（background 無し）はエージェントプロキシの約30秒制限内に返しきる必要があり、
- * 上限を上げると 502 になる（実測: Issue #25 で gemini:propose が 16000 で止まった）。
- * 非同期（background: true）はポーリングで取るので上げてよい
- * （実測: Issue #10 で openai:propose が 8000 では打ち切られた）。
+ * エージェントプロキシは、Gemini 宛ての応答ヘッダ（最初のバイト）が約30秒届かないと
+ * 502 "upstream request failed" を返す。**総所要の制限ではない。**
+ * （実測: ストリーミングでは 137〜182秒・1.1万〜1.4万トークンの生成が 7/7 成功した）
+ *   - 非ストリーミングの同期呼び出しは全文を生成し終えるまでヘッダが返らないので、
+ *     実質「総所要30秒」になる。約89トークン/秒なので返せるのは約2,600トークンまで。
+ *   - ストリーミング（stream: true）は最初のチャンクでヘッダが返るので上限を上げてよい。
+ *   - 非同期（background: true）はポーリングで取るので上げてよい
+ *     （実測: Issue #10 で openai:propose が 8000 では打ち切られた）。
  * この非対称を散文で管理すると必ずずれるので、ここ1箇所で解決する。
  *
  * @param {string|{provider:string,tier:string}} spec
@@ -93,7 +100,7 @@ function authHeaders(provider) {
   return { headers: { [header]: prefix ? `${prefix} ${key}` : key }, mode: 'local-env' };
 }
 
-function buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens }) {
+export function buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens }) {
   const url = provider.endpoint.replace('{model}', tier.model);
 
   if (providerName === 'gemini') {
@@ -101,6 +108,24 @@ function buildRequest({ providerName, provider, tier, system, input, schema, max
     if (schema) {
       generationConfig.responseMimeType = 'application/json';
       generationConfig.responseSchema = toGeminiSchema(schema);
+    }
+    // 思考中は1バイトも流れないので、思考が長いとストリーミングでも最初のバイトが30秒を越えて 502 になる。
+    // 実測（既定 thinking）: 最初のバイトまで 12.8〜27.5秒とばらついた。low なら 1.9〜4.0秒。
+    if (tier.thinking_level) generationConfig.thinkingConfig = { thinkingLevel: tier.thinking_level };
+    if (tier.stream) {
+      if (!url.includes(':generateContent')) {
+        throw new Error(`stream: true ですが endpoint が :generateContent を含みません (${provider.endpoint})。`
+          + ' loop/config.json の providers.gemini.endpoint を確認してください。');
+      }
+      return {
+        url: `${url.replace(':generateContent', ':streamGenerateContent')}?alt=sse`,
+        stream: true,
+        body: {
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: input }] }],
+          generationConfig,
+        },
+      };
     }
     return {
       url,
@@ -130,13 +155,58 @@ function buildRequest({ providerName, provider, tier, system, input, schema, max
   throw new Error(`リクエスト構築が未実装のプロバイダ: ${providerName}`);
 }
 
+/**
+ * Gemini の SSE 応答（`data: {...}` の列）を、非ストリーミングの応答と同じ形に畳む。純関数。
+ *
+ * 本文は各チャンクの parts を連結する。finishReason と usageMetadata は最後のチャンクにしか
+ * 入らないので、後勝ちで拾う。途中でエラーが返った場合は例外にする（部分的な本文を成功にしない）。
+ */
+export function parseGeminiSSE(text) {
+  const parts = [];
+  let finishReason;
+  let usageMetadata;
+  let events = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload) continue;
+    let ev;
+    try {
+      ev = JSON.parse(payload);
+    } catch {
+      throw new Error(`Gemini のストリームに JSON でない行がありました。先頭200文字: ${payload.slice(0, 200)}`);
+    }
+    events++;
+    if (ev.error) {
+      throw new Error(`Gemini がストリームの途中でエラーを返しました: ${JSON.stringify(ev.error).slice(0, 400)}`);
+    }
+    const cand = ev.candidates?.[0];
+    if (cand?.content?.parts) parts.push(...cand.content.parts);
+    if (cand?.finishReason) finishReason = cand.finishReason;
+    if (ev.usageMetadata) usageMetadata = ev.usageMetadata;
+  }
+  if (events === 0) {
+    throw new Error(`Gemini のストリームにイベントが1つもありませんでした。先頭200文字: ${text.slice(0, 200)}`);
+  }
+  // 最後のチャンクには必ず finishReason が付く。無ければ途中で切れており、本文は不完全
+  if (!finishReason) {
+    throw new Error(`Gemini のストリームが finishReason の前に途切れました（${events} チャンク受信）。`
+      + ' 次の run で再試行してください。続くなら node loop/bin/doctor.mjs --latency で切り分けてください。');
+  }
+  return {
+    candidates: [{ finishReason, content: { parts } }],
+    usageMetadata: usageMetadata ?? {},
+  };
+}
+
 export function extractGemini(json) {
   const cand = json.candidates?.[0];
   if (!cand) throw new Error(`Gemini が候補を返しませんでした: ${JSON.stringify(json).slice(0, 400)}`);
   if (cand.finishReason && !['STOP', 'MAX_TOKENS'].includes(cand.finishReason)) {
     throw new Error(`Gemini が異常終了しました finishReason=${cand.finishReason}`);
   }
-  const text = (cand.content?.parts ?? []).map((p) => p.text ?? '').join('');
+  // includeThoughts を付けると思考の要約が thought: true の part で混ざる。本文には入れない
+  const text = (cand.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? '').join('');
   const u = json.usageMetadata ?? {};
   const thoughts = u.thoughtsTokenCount ?? 0;
   const candidates = u.candidatesTokenCount ?? 0;
@@ -150,7 +220,7 @@ export function extractGemini(json) {
   if (!text.trim()) {
     const why = cand.finishReason === 'MAX_TOKENS'
       ? `思考トークン ${thoughts} が maxOutputTokens を使い切り、本文が生成されませんでした。`
-        + ' thinkingLevel を下げるか maxOutputTokens を上げてください。'
+        + ' loop/config.json の該当階層で thinking_level を下げるか max_output_tokens を上げてください。'
       : `finishReason=${cand.finishReason ?? '(なし)'} で本文が空でした。`;
     throw new Error(`Gemini が空の応答を返しました。${why}`);
   }
@@ -199,7 +269,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *   API credential のキーはそのプロキシがリクエストに付与する。
  *   ところが Node の fetch(undici) は HTTPS_PROXY を既定で無視するため、
  *   プロキシを素通りしてキーの付かないリクエストがプロバイダに届く。
- *   （env proxy を見る NODE_USE_ENV_PROXY は Node 24 以降。サンドボックスは Node 22。）
+ *   （NODE_USE_ENV_PROXY=1 を付ければ Node 22.21 以降の fetch も env proxy を見る（実測: 22.22 で 200）が、
+ *    環境変数1つの付け忘れでキー無しのリクエストが黙って飛ぶ経路を残したくない。）
  *   実測: 同一リクエストが curl では 200、Node fetch では 403/401 になった。
  *   curl は HTTPS_PROXY を尊重するので、転送は curl に一本化する。
  *
@@ -224,11 +295,13 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180, m
 
     // --fail 系は付けない。HTTP エラーは -w のステータスで判定し、本文も読みたいため。
     // こうしておくと curl の終了コードが非ゼロなのは本当の転送エラーのときだけになる。
+    // time_starttransfer（最初のバイトまでの秒数）も取る。プロキシの30秒の壁は
+    // 総所要ではなくこの値に掛かっているので、これが無いと 502 の切り分けができない。
     const args = [
       '-sS', '-X', method, url,
       '-K', cfgFile,
       '-o', resFile, '-D', hdrFile,
-      '-w', '%{http_code}',
+      '-w', '%{http_code} %{time_starttransfer}',
       '--max-time', String(timeoutSec),
     ];
     if (method !== 'GET') args.push('--data-binary', `@${reqFile}`);
@@ -240,11 +313,13 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180, m
       const why = [e.stderr, e.message].filter(Boolean).join(' ').trim();
       throw new Error(`curl の実行に失敗しました: ${why || '原因不明'}`);
     }
-    if (!/^\d{3}$/.test(statusText.trim())) {
+    const m = statusText.trim().match(/^(\d{3}) ([\d.]+)$/);
+    if (!m) {
       throw new Error(`curl がステータスコードを返しませんでした: ${statusText.slice(0, 200)}`);
     }
 
-    const status = Number(statusText.trim());
+    const status = Number(m[1]);
+    const ttfbSec = Math.round(Number(m[2]) * 10) / 10;
     const text = readFileSync(resFile, 'utf8');
     const raw = readFileSync(hdrFile, 'utf8');
 
@@ -260,6 +335,7 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180, m
       statusText: status >= 400 ? 'Error' : 'OK',
       headers: { get: (k) => map.get(String(k).toLowerCase()) ?? null },
       text,
+      ttfbSec,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -270,9 +346,10 @@ export function curlPostJson(url, { headers = {}, body = '', timeoutSec = 180, m
  * OpenAI の background レスポンスが終わるまで短い GET を繰り返す。
  *
  * なぜ必要か:
- *   エージェントプロキシは1リクエストあたり約30秒で諦め、
+ *   エージェントプロキシは応答ヘッダ（最初のバイト）を約30秒待って届かないと
  *   502 "upstream request failed" を返す（実測。gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
- *   提案の生成は数千トークンかかるので同期リクエストでは原理的に収まらない。
+ *   非ストリーミングの同期リクエストは生成が終わるまでヘッダが返らないので、
+ *   数千トークンの提案は原理的に収まらない。
  *   background なら POST が即座に返り、以降は1回数百ミリ秒の GET で済むため壁を越えられる。
  */
 export async function pollOpenAIBackground(provider, created, { log, maxWaitSec = 420, intervalSec = 5 } = {}) {
@@ -382,7 +459,7 @@ export async function askLLM({
   }
   const { providerName, tierName, provider, tier } = resolveTier(spec, config);
   maxOutputTokens = resolveMaxOutputTokens(spec, config, maxOutputTokens);
-  const { url, body } = buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens });
+  const { url, body, stream } = buildRequest({ providerName, provider, tier, system, input, schema, maxOutputTokens });
   const { headers, mode } = authHeaders(provider);
 
   if (process.env.LOOP_DRY_RUN === '1') {
@@ -403,6 +480,8 @@ export async function askLLM({
       res = curlPostJson(url, {
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify(body),
+        // ストリーミングは数分かかる（実測 最大182秒）。既定の180秒では足りない
+        ...(stream ? { timeoutSec: maxWaitSec } : {}),
       });
     } catch (e) {
       lastErr = new Error(`ネットワークエラー: ${e.message}`);
@@ -415,10 +494,14 @@ export async function askLLM({
 
     if (res.ok) {
       let json;
-      try {
-        json = JSON.parse(res.text);
-      } catch {
-        throw new Error(`${providerName}:${tierName} が JSON を返しませんでした。先頭200文字: ${res.text.slice(0, 200)}`);
+      if (stream) {
+        json = parseGeminiSSE(res.text);
+      } else {
+        try {
+          json = JSON.parse(res.text);
+        } catch {
+          throw new Error(`${providerName}:${tierName} が JSON を返しませんでした。先頭200文字: ${res.text.slice(0, 200)}`);
+        }
       }
       // background で投げた場合、POST は {id, status:"queued"} を即返すだけ。本体はポーリングで取る。
       if (providerName === 'openai' && tier.background && json.id && !json.output?.length) {
@@ -439,17 +522,19 @@ export async function askLLM({
       //   「30秒を超えて成功した呼び出し」の記録が1件も無かった。
       //   そのため「約30秒の壁」が応答開始までの制限なのか総所要の制限なのかを
       //   誰も判定できず、同じ 502 を3回調べて3回違う結論を出すことになった。
+      //   最初のバイトまでの秒数（ttfb）も残す。壁はこちらに掛かっている。
       const elapsedOk = Math.round((Date.now() - startedAt) / 1000);
       const thoughts = out.usage.thoughts_tokens;
       log(`[cost] ${providerName}:${tierName} ${tier.model}`
         + ` in=${out.usage.input_tokens} out=${out.usage.output_tokens}`
         + (thoughts != null ? ` (thoughts=${thoughts})` : '')
-        + ` ${elapsedOk}秒 attempts=${attempt} = USD ${cost.toFixed(4)} (auth=${mode})`);
+        + ` ${elapsedOk}秒 (最初のバイト ${res.ttfbSec}秒${stream ? ' stream' : ''}) attempts=${attempt} = USD ${cost.toFixed(4)} (auth=${mode})`);
       if (out.truncated) log(`[warn] 出力が maxOutputTokens(${maxOutputTokens}) で打ち切られた可能性があります`);
       return {
         providerName, tierName, model: tier.model, text: out.text, parsed,
         usage: out.usage, cost_usd: cost, truncated: out.truncated,
-        elapsed_sec: elapsedOk, attempts: attempt, max_output_tokens: maxOutputTokens,
+        elapsed_sec: elapsedOk, ttfb_sec: res.ttfbSec, stream: Boolean(stream),
+        attempts: attempt, max_output_tokens: maxOutputTokens,
       };
     }
 
@@ -459,8 +544,8 @@ export async function askLLM({
     // 当たっているのか、即座に蹴られているのかはこの数字でしか分からない。
     lastErr = new Error(`HTTP ${res.status} (${elapsed}秒): ${bodyText.slice(0, 500)}`);
     lastErr.detail = {
-      http_status: res.status, elapsed_sec: elapsed, attempts: attempt,
-      max_output_tokens: maxOutputTokens,
+      http_status: res.status, elapsed_sec: elapsed, ttfb_sec: res.ttfbSec, stream: Boolean(stream),
+      attempts: attempt, max_output_tokens: maxOutputTokens,
       body: bodyText.slice(0, 2000),
       // 502 の発生元の切り分けに効くヘッダだけ残す
       headers: Object.fromEntries(['server', 'via', 'x-deny-reason', 'retry-after']
@@ -472,12 +557,17 @@ export async function askLLM({
     // 1 invocation に約138秒（4試行×31秒＋待機14秒）かけても成功機構が無いので、即座に諦める。
     const slowGateway = (res.status === 502 || res.status === 504) && elapsed >= 25;
     if (slowGateway) {
-      lastErr.message += `\n[診断] 応答までに ${elapsed} 秒かかってから ${res.status} になりました。`
-        + '長い生成が時間の壁に当たっています（このリポジトリでの実測は約30秒。'
-        + 'ただし壁が Anthropic のプロキシ側なのかプロバイダ側なのかは未特定で、公式の記述もありません）。'
+      // 502 の本文 "upstream request failed"（text/plain・Go の http.Error の形）はプロキシ側が生成している。
+      // Google の応答なら Server-Timing ヘッダと JSON のエラー本文が付く。
+      lastErr.message += `\n[診断] 最初のバイトが ${res.ttfbSec} 秒届かず ${res.status} になりました。`
+        + 'エージェントプロキシは応答ヘッダを約30秒待って届かないと 502 を返します（総所要の制限ではありません）。'
         + '**同一リクエストの再試行は行いません。** 同じ時間をかけて同じように落ちるためです。'
-        + '次の run で再試行するか、生成を短くしてください'
-        + '（Gemini なら thinkingLevel、OpenAI なら background: true / reasoning_effort）。'
+        + (providerName === 'gemini'
+          ? (stream
+            ? ' ストリーミングでも思考中は1バイトも流れないので、loop/config.json の該当階層の'
+              + ' thinking_level を "low" にしてください（実測: 最初のバイトまで 1.9〜4.0秒）。'
+            : ' loop/config.json の該当階層に stream: true を付けてください（最初のチャンクでヘッダが返るので壁に当たらない）。')
+          : ' loop/config.json の該当階層に background: true を付けるか、reasoning_effort を下げてください。')
         + ' 切り分けには node loop/bin/doctor.mjs --latency を使ってください。';
     }
 
@@ -519,7 +609,8 @@ const USAGE = [
   '      [--max-output-tokens <n>] --out <file>',
   '',
   '  --max-output-tokens は通常渡さない。既定は config の tiers.*.max_output_tokens。',
-  '  同期階層（background 無し）で上げるとプロキシの約30秒制限に当たって 502 になる。',
+  '  非ストリーミングの同期階層（background も stream も無し）で上げると、',
+  '  最初のバイトが約30秒届かずプロキシが 502 を返す。',
   '',
   '  --provider/--tier の代わりに --spec gemini:review と書いてもよい。',
   '  --schema を省くとプレーンテキスト（提案文など）として扱う。',
@@ -584,8 +675,10 @@ async function main() {
     schema, usage: r.usage, cost_usd: r.cost_usd,
     truncated: r.truncated ?? false, dry_run: r.dryRun ?? false,
     // ★ 計測。これが無いと「上限を変えたら直った」のような主張を検証できない。
-    //   elapsed_sec は壁が応答開始までの制限か総所要の制限かを判定する唯一の材料。
+    //   ttfb_sec（最初のバイトまで）と elapsed_sec（総所要）の両方があって初めて壁の性質を判定できる。
     elapsed_sec: r.elapsed_sec ?? null,
+    ttfb_sec: r.ttfb_sec ?? null,
+    stream: r.stream ?? false,
     attempts: r.attempts ?? null,
     max_output_tokens: r.max_output_tokens ?? maxOutputTokens,
     at: new Date().toISOString(),
