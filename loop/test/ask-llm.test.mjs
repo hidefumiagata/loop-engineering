@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   resolveTier, resolveMaxOutputTokens, computeCost, extractGemini,
-  ASYNC_PROVIDERS, SYNC_MAX_OUTPUT_TOKENS,
+  ASYNC_PROVIDERS, STREAM_PROVIDERS, SYNC_MAX_OUTPUT_TOKENS, buildRequest, parseGeminiSSE,
 } from '../bin/ask-llm.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -24,8 +24,8 @@ const config = JSON.parse(readFileSync(resolve(ROOT, 'loop/config.json'), 'utf8'
 // ---- 出力上限（Issue #25 の再発防止の本体） ----
 
 test('出力上限は config の階層設定から解決される', () => {
-  // 同期階層。約30秒のプロキシ制限内に返しきる必要がある
-  assert.equal(resolveMaxOutputTokens('gemini:propose', config), 8000);
+  // ストリーミング階層。最初のチャンクでヘッダが返るので30秒の壁に当たらない
+  assert.equal(resolveMaxOutputTokens('gemini:propose', config), 16000);
   // 非同期階層。background: true なのでポーリングで取れる
   assert.equal(resolveMaxOutputTokens('openai:propose', config), 16000);
 });
@@ -42,14 +42,16 @@ test('階層に設定が無ければ同期の安全値に落ちる', () => {
   assert.equal(SYNC_MAX_OUTPUT_TOKENS, 8000);
 });
 
-test('同期階層の上限が約30秒で返しきれる値に収まっている', () => {
-  // background を実装しているのは openai だけ（buildRequest が他を見ない）。
-  // 非 openai に background: true を付けても非同期にはならないので、
-  // 例外を認めるのは ASYNC_PROVIDERS に属する階層だけ。
+test('非ストリーミングの同期階層は上限を上げていない', () => {
+  // プロキシは最初のバイトを約30秒待って届かないと 502 を返す。非ストリーミングの同期呼び出しは
+  // 全文を生成し終えるまで最初のバイトが返らないので、長い生成は原理的に通らない。
+  // background を実装しているのは openai だけ、stream を実装しているのは gemini だけ
+  // （buildRequest が他を見ない）。例外を認めるのは実装のある組み合わせだけ。
   // enabled:false の階層は resolveTier が投げるので、config の値を直接見る。
   for (const [pname, provider] of Object.entries(config.providers)) {
     for (const [tname, tier] of Object.entries(provider.tiers)) {
       if (ASYNC_PROVIDERS.includes(pname) && tier.background === true) continue;
+      if (STREAM_PROVIDERS.includes(pname) && tier.stream === true) continue;
       const cap = tier.max_output_tokens ?? SYNC_MAX_OUTPUT_TOKENS;
       assert.ok(cap <= SYNC_MAX_OUTPUT_TOKENS,
         `${pname}:${tname} は同期扱いなのに上限が ${cap}。`
@@ -188,7 +190,7 @@ test('本文が空なら例外になる（MAX_TOKENS で思考が予算を食い
     extractGemini(geminiResponse({ text: '', finishReason: 'MAX_TOKENS', thoughts: 8000, candidates: 0 }));
   } catch (e) {
     assert.match(e.message, /思考トークン 8000/, '思考トークン数が出ない');
-    assert.match(e.message, /thinkingLevel/, '対処が示されていない');
+    assert.match(e.message, /max_output_tokens/, '対処が示されていない');
   }
 });
 
@@ -214,6 +216,14 @@ test('思考トークンを本文トークンと分けて記録する', () => {
   assert.equal(r.usage.thoughts_tokens, 1914);
   // 価格は思考分も課金対象なので、合算が output_tokens であること
   assert.equal(r.usage.output_tokens, 5914);
+});
+
+test('includeThoughts の思考 part は本文に入れない', () => {
+  const r = extractGemini({
+    candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '考え中…', thought: true }, { text: '本文' }] } }],
+    usageMetadata: {},
+  });
+  assert.equal(r.text, '本文');
 });
 
 test('異常終了は従来どおり例外', () => {
@@ -246,11 +256,12 @@ test('失敗時にも機械可読な記録を残す', () => {
     const outFile = join(dir, 'out.md');
     writeFileSync(inFile, 'ping\n', 'utf8');
 
-    // ローカルには credential が無いので 403 で必ず失敗する。
-    // 「失敗したときに記録が残るか」はそれで検証できる。
+    // 不正な上限を渡して必ず失敗させる。ローカル（credential 無し）なら 403、
+    // クラウド（プロキシがキーを付与する）なら生成前に 400 で弾かれるので課金も無い。
+    // 以前は「ローカルには credential が無いので 403」を前提にしており、クラウドでは成功して落ちていた。
     const r = spawnSync(process.execPath, [
       resolve(ROOT, 'loop/bin/ask-llm.mjs'),
-      '--spec', 'gemini:review', '--input', inFile, '--out', outFile,
+      '--spec', 'gemini:review', '--input', inFile, '--out', outFile, '--max-output-tokens', '-1',
     ], { encoding: 'utf8' });
 
     assert.notEqual(r.status, 0, '失敗するはずの呼び出しが成功した');
@@ -258,7 +269,7 @@ test('失敗時にも機械可読な記録を残す', () => {
     assert.ok(existsSync(errFile), `失敗の記録 ${errFile} が書かれていない`);
 
     const rec = JSON.parse(readFileSync(errFile, 'utf8'));
-    for (const key of ['http_status', 'elapsed_sec', 'attempts', 'error', 'at']) {
+    for (const key of ['http_status', 'elapsed_sec', 'ttfb_sec', 'attempts', 'error', 'at']) {
       assert.ok(rec[key] !== undefined, `記録に ${key} が無い`);
     }
     assert.equal(typeof rec.elapsed_sec, 'number',
@@ -277,7 +288,62 @@ test('成功時の meta に計測値が入る形になっている', () => {
   const at = src.indexOf('.meta.json`, JSON.stringify({');
   assert.ok(at > 0, 'meta の書き出し箇所が見つからない');
   const block = src.slice(at, src.indexOf('}, null, 2)', at));
-  for (const key of ['elapsed_sec', 'attempts', 'max_output_tokens']) {
+  for (const key of ['elapsed_sec', 'ttfb_sec', 'stream', 'attempts', 'max_output_tokens']) {
     assert.match(block, new RegExp(`${key}:`), `meta の書き出しに ${key} が無い`);
   }
+});
+
+// ---- ストリーミング（30秒の壁は最初のバイトまでの制限。総所要ではない） ----
+//
+// 実測: 非ストリーミングは生成が30秒を越えると 30.4秒で 502。ストリーミングは
+// 137〜182秒・1.1万〜1.4万トークンの生成が 7/7 成功した。
+
+const req = (tier) => buildRequest({
+  providerName: 'gemini', provider: config.providers.gemini, tier,
+  system: 's', input: 'i', schema: null, maxOutputTokens: 100,
+});
+
+test('stream: true の Gemini 階層は SSE のエンドポイントに投げる', () => {
+  const r = req({ model: 'm', stream: true });
+  assert.equal(r.stream, true);
+  assert.match(r.url, /\/models\/m:streamGenerateContent\?alt=sse$/);
+  // 付けなければ従来どおり
+  const plain = req({ model: 'm' });
+  assert.ok(!plain.stream);
+  assert.match(plain.url, /\/models\/m:generateContent$/);
+});
+
+test('gemini:propose はストリーミングで呼ぶ', () => {
+  const t = config.providers.gemini.tiers.propose;
+  assert.equal(t.stream, true, 'stream を外すと生成が30秒を越えた時点で 502 になる');
+});
+
+test('SSE のチャンクを1つの応答に畳む', () => {
+  const sse = [
+    'data: {"candidates":[{"content":{"parts":[{"text":"前半"}],"role":"model"}}]}',
+    '',
+    'data: {"candidates":[{"content":{"parts":[{"text":"後半"}],"role":"model"},"finishReason":"STOP"}],'
+      + '"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20,"thoughtsTokenCount":5}}',
+    '',
+  ].join('\r\n');
+  const r = extractGemini(parseGeminiSSE(sse));
+  assert.equal(r.text, '前半後半');
+  assert.equal(r.truncated, false);
+  assert.equal(r.usage.input_tokens, 10);
+  assert.equal(r.usage.output_tokens, 25);
+});
+
+test('SSE の途中のエラーは例外になる（部分的な本文を成功にしない）', () => {
+  const sse = 'data: {"candidates":[{"content":{"parts":[{"text":"途中"}]}}]}\n\n'
+    + 'data: {"error":{"code":500,"message":"internal"}}\n\n';
+  assert.throws(() => parseGeminiSSE(sse), /ストリームの途中でエラー/);
+});
+
+test('SSE が finishReason の前に途切れたら例外になる', () => {
+  const sse = 'data: {"candidates":[{"content":{"parts":[{"text":"途中まで"}]}}]}\n\n';
+  assert.throws(() => parseGeminiSSE(sse), /途切れました/);
+});
+
+test('SSE にイベントが無ければ例外になる', () => {
+  assert.throws(() => parseGeminiSSE('upstream request failed'), /イベントが1つもありません/);
 });

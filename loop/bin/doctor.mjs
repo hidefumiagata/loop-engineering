@@ -167,7 +167,7 @@ function listModels(config) {
 /**
  * 本番と同じ長さの生成を n 回投げて、所要時間と 502 率を測る。
  *
- *   node loop/bin/doctor.mjs --latency [--spec gemini:propose] [--n 10] [--input <file>]
+ *   node loop/bin/doctor.mjs --latency [--spec gemini:propose] [--n 10] [--input <file>] [--no-stream]
  *
  * なぜ必要か:
  *   「約30秒の壁」に当たっているかどうかは、所要時間を測らないと分からない。
@@ -176,10 +176,15 @@ function listModels(config) {
  *   実際にそれで3回判断を誤った。ここで一度に複数点を取る。
  *
  * 判定の仕方:
- *   - 成功の所要が30秒を超える回があれば、壁は「総所要の制限」ではない
- *     → ストリーミングで越えられる可能性がある
- *   - 成功が全て28秒未満で失敗が全て30〜31秒なら、総所要の制限が濃厚
+ *   壁は「最初のバイトまで約30秒」で、総所要の制限ではない（実測で確定。ストリーミングで
+ *   137〜182秒の生成が 7/7 成功した）。だから所要と最初のバイトまでの秒数を分けて出す。
+ *   - 失敗の最初のバイトが30秒前後 → 壁に当たっている。非ストリーミングなら stream: true、
+ *     ストリーミングなら思考が長すぎた（思考中は1バイトも流れない）
  *   - 502 が0件なら、パラメータではなく時間相関の外部要因
+ *
+ *   ★ 以前の判定は非ストリーミングしか測らずに「成功が全て30秒未満なら総所要の制限が濃厚」と
+ *     結論していた。非ストリーミングでは最初のバイト＝総所要なので、この観測からは両者を原理的に
+ *     区別できない。--no-stream で旧方式と比較できるようにしてある。
  */
 async function measureLatency(config) {
   const argOf = (name, dflt) => {
@@ -189,6 +194,12 @@ async function measureLatency(config) {
   const spec = argOf('--spec', 'gemini:propose');
   const n = Math.max(1, Math.min(30, Number(argOf('--n', '6'))));
   const inputPath = argOf('--input', null);
+  // 旧方式（非ストリーミング）との比較用。config は書き換えず、この測定の中だけで外す
+  if (process.argv.includes('--no-stream')) {
+    config = structuredClone(config);
+    const [p, t] = spec.split(':');
+    if (config.providers?.[p]?.tiers?.[t]) config.providers[p].tiers[t].stream = false;
+  }
 
   // ★ ドライランでは測れない。LLM を呼ばないので所要0秒・502なしになり、
   //   「パラメータではなく外部要因」という誤った判定を出してしまう。
@@ -214,10 +225,10 @@ async function measureLatency(config) {
   line('# 所要時間の実測');
   line('');
   line(`spec: ${spec} (${tier.model})  n=${n}  入力 ${input.length} 文字`);
-  line(`max_output_tokens: ${tier.max_output_tokens ?? '(既定)'}`);
+  line(`max_output_tokens: ${tier.max_output_tokens ?? '(既定)'}  stream: ${tier.stream === true}`);
   line('');
-  line('| # | 結果 | 所要秒 | out | thoughts | truncated | 備考 |');
-  line('| --- | --- | --- | --- | --- | --- | --- |');
+  line('| # | 結果 | 最初のバイト秒 | 所要秒 | out | thoughts | truncated | 備考 |');
+  line('| --- | --- | --- | --- | --- | --- | --- | --- |');
 
   const rows = [];
   for (let i = 1; i <= n; i++) {
@@ -225,13 +236,13 @@ async function measureLatency(config) {
     try {
       const r = await askLLM({ spec, system, input, config, log: () => {} });
       const sec = r.elapsed_sec ?? Math.round((Date.now() - t0) / 1000);
-      rows.push({ ok: true, sec, out: r.usage.output_tokens, th: r.usage.thoughts_tokens, tr: r.truncated });
-      line(`| ${i} | OK | ${sec} | ${r.usage.output_tokens} | ${r.usage.thoughts_tokens ?? '-'} | ${r.truncated} | attempts=${r.attempts} |`);
+      rows.push({ ok: true, sec, ttfb: r.ttfb_sec, out: r.usage.output_tokens, th: r.usage.thoughts_tokens, tr: r.truncated });
+      line(`| ${i} | OK | ${r.ttfb_sec ?? '-'} | ${sec} | ${r.usage.output_tokens} | ${r.usage.thoughts_tokens ?? '-'} | ${r.truncated} | attempts=${r.attempts} |`);
     } catch (e) {
       const d = e.detail ?? {};
       const sec = d.elapsed_sec ?? Math.round((Date.now() - t0) / 1000);
-      rows.push({ ok: false, sec, status: d.http_status });
-      line(`| ${i} | **失敗** | ${sec} | - | - | - | HTTP ${d.http_status ?? '?'} ${String(e.message).split('\n')[0].slice(0, 60)} |`);
+      rows.push({ ok: false, sec, ttfb: d.ttfb_sec, status: d.http_status });
+      line(`| ${i} | **失敗** | ${d.ttfb_sec ?? '-'} | ${sec} | - | - | - | HTTP ${d.http_status ?? '?'} ${String(e.message).split('\n')[0].slice(0, 60)} |`);
     }
   }
 
@@ -244,7 +255,11 @@ async function measureLatency(config) {
   line('');
   line(`成功 ${ok.length}/${rows.length}  時間の壁による失敗 ${ng.length}/${rows.length}`
     + (other.length ? `  その他の失敗 ${other.length}/${rows.length}` : ''));
-  if (ok.length) line(`成功の所要: 最小 ${Math.min(...ok.map((r) => r.sec))}秒 / 最大 ${maxOk}秒`);
+  if (ok.length) {
+    line(`成功の所要: 最小 ${Math.min(...ok.map((r) => r.sec))}秒 / 最大 ${maxOk}秒`);
+    const tt = ok.map((r) => r.ttfb).filter((v) => v != null);
+    if (tt.length) line(`成功の最初のバイト: 最小 ${Math.min(...tt)}秒 / 最大 ${Math.max(...tt)}秒`);
+  }
   if (ng.length) line(`壁による失敗の所要: 最小 ${Math.min(...ng.map((r) => r.sec))}秒 / 最大 ${Math.max(...ng.map((r) => r.sec))}秒`);
   line('');
   line('## 判定');
@@ -254,14 +269,17 @@ async function measureLatency(config) {
   } else if (!ng.length && !ok.length) {
     line('  成功も壁による失敗も無い。測定不能。');
   } else if (!ng.length) {
-    line('  時間の壁による失敗が0件。パラメータではなく時間相関の外部要因が疑わしい。');
-    line('  → プロバイダ設定は触らず、502 を即座に諦めて次の run に再試行させる形で十分。');
-  } else if (maxOk != null && maxOk > 30) {
-    line(`  成功で ${maxOk} 秒かかった回がある。**壁は「総所要の制限」ではない。**`);
-    line('  → ストリーミング（:streamGenerateContent?alt=sse）で越えられる可能性がある。');
+    line('  時間の壁による失敗が0件。'
+      + (maxOk != null && maxOk > 30 ? `30秒を超える成功（最大 ${maxOk} 秒）があり、壁が総所要の制限でないことと整合する。` : ''));
+    line('  → 本番で 502 が出ているなら、*.error.json の ttfb_sec を見ること。'
+      + '30秒前後なら壁、短ければプロキシかプロバイダ側の一時的な障害。');
+  } else if (tier.stream) {
+    line('  ストリーミングでも最初のバイトが約30秒届かずに落ちた回がある。思考中は1バイトも流れないため。');
+    line('  → 頻発するなら、最初のバイトまでの秒数の分布を見て対策を検討する（実測: 既定 thinking で 12.8〜27.5秒）。');
   } else {
-    line('  成功が全て30秒未満で、失敗が30秒前後。**総所要の制限が濃厚。**');
-    line('  → ストリーミングでは越えられない。生成を短くする（thinkingLevel 等）か非同期経路を使う。');
+    line('  非ストリーミングでは全文を生成し終えるまで最初のバイトが返らないので、生成が30秒を越えると落ちる。');
+    line('  （この観測だけでは総所要の制限と区別できないが、ストリーミングで30秒超の成功が実測済み）');
+    line('  → loop/config.json の該当階層に stream: true を付ける（Gemini）か background: true を付ける（OpenAI）。');
   }
   line('');
   line('この出力にキーの値は含まれていません。そのまま貼って共有して構いません。');
