@@ -2,7 +2,7 @@
 title: 社外イベント参加・登壇「手挙げ循環」施策
 issue: 30
 updated: 2026-10-06
-status: draft
+status: reviewed
 ---
 
 ## 一言で言うと
