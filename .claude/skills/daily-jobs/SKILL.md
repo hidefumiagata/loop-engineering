@@ -1,6 +1,6 @@
 ---
 name: daily-jobs
-description: 毎日決まった時刻に実行される定期ジョブを1 run 分まとめて実行する。loop/jobs/ の定義（Hacker News Top10 要約、AIニュース5点など）に従って成果物を作り、PR を作り、マージを1回試す（拒否されたら人間に渡す）。Issue は使わない。Issue 駆動のループ（loop-engine）とは別の routine から呼ばれる。
+description: 毎日決まった時刻に実行される定期ジョブを1 run 分まとめて実行する。loop/jobs/ の定義（Hacker News Top10 要約、AIニュース5点など）に従って成果物を作り、PR を作って通知する（マージは人間がする）。Issue は使わない。Issue 駆動のループ（loop-engine）とは別の routine から呼ばれる。
 ---
 
 # daily-jobs
@@ -13,7 +13,7 @@ description: 毎日決まった時刻に実行される定期ジョブを1 run �
 | 入力 | GitHub Issue | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **マージを1回試す。** 拒否されたら記録して人間に渡す |
+| PR | 人間がマージする | 人間がマージする（**マージ API を呼ばない**） |
 
 **Issue を作らない・触らない・コメントしない。** この routine は Issue と無関係である。
 
@@ -24,10 +24,10 @@ description: 毎日決まった時刻に実行される定期ジョブを1 run �
 3. **成果物を捏造しない。** 情報が取れなかったら「取れなかった」と書く。
    件数が揃わないなら、揃わなかった理由を成果物の冒頭に書く。
 4. **GitHub の操作は REST だけ。** GraphQL はクラウドセッションから 403 で拒否される。
-   `gh pr create` / `gh pr merge` は**使えない**。`gh api` を使う。
+   `gh pr create` は**使えない**。`gh api` を使う。
 5. **他社LLMは呼ばない。** この routine は Claude 自身が調べて書く。
    `ask-llm.mjs` を使う必要はない。
-6. `LOOP_DRY_RUN=1` のときは push・PR 作成・マージを行わず、何をするかだけ出力する。
+6. `LOOP_DRY_RUN=1` のときは push・PR 作成を行わず、何をするかだけ出力する。
 
 ---
 
@@ -99,7 +99,7 @@ git rev-parse --abbrev-ref HEAD
 
 **全ジョブが失敗した場合もログだけはコミットする。** 沈黙して終わらない。
 
-## Step 5. コミットして PR を作り、マージを試す
+## Step 5. コミットして PR を作る
 
 ```bash
 git add -A
@@ -124,64 +124,35 @@ PR=$(gh api -X POST "repos/$REPO/pulls" --input /tmp/pr.json --jq .number)
 echo "PR #$PR"
 ```
 
+PR 本文に「自動マージ」と書かない。マージは人間がする。
+
 **Issue 番号を書かない。** `Closes #N` を入れてはならない。この routine は Issue と無関係で、
 無関係な Issue を閉じてしまう事故になる。
 
-### マージを1回だけ試す。拒否されたら記録して人間に渡す
+### マージしない。人間に渡す
 
-```bash
-cat > /tmp/merge.json <<EOF
-{ "merge_method": "squash", "commit_title": "daily($DATE): 定期ジョブの成果物 (#$PR)" }
-EOF
-if gh api -X PUT "repos/$REPO/pulls/$PR/merge" --input /tmp/merge.json > /tmp/merge-out.json 2>/tmp/merge-err.txt; then
-  MERGED=yes
-else
-  MERGED=no
-  cat /tmp/merge-err.txt   # ★ 失敗の本文を必ず出す。捨ててはならない
-fi
-echo "merged=$MERGED"
-```
+**マージ API を呼ばない。** PR を作ったところでこの routine の仕事は終わる。マージは人間がする。
 
-**試すのは1回だけ。再試行しない。**
-
-> **実測: マージが拒否されることがある。**
-> `daily-2026-10-06` の PR #27 では、ハーネス（Claude Code の auto-mode 権限分類器）が
-> merge 呼び出しを `Merge Without Review`（レビュー無しのマージ）と判定し、
-> **GitHub API に届く前に**止めた。これはツールの許可不足ではないので
-> `permissions.allow` では緩和できない（拒否理由が「レビューが無い」であり、
-> 許可リストが答える種類の問いではない）。
+> **実測: 自動マージは3回の run すべてで拒否された**（PR #17・#27・#34）。
+> routine は auto モードで動き（権限モードを選ぶ手段が無い）、その権限分類器が
+> merge 呼び出しを `Merge Without Review` と判定して **GitHub API に届く前に**止める。
+> 公式ドキュメントの既定ブロック対象に
+> 「Merging a pull request no human has approved」とあり、protected branch かどうかではなく
+> **人間の approve が無いこと**が判定条件である
+> （https://code.claude.com/docs/en/permission-modes）。
+> 「PR を作ってすぐ自分でマージする」というこの routine の流れは、定義上これに当たる。
 >
-> **再試行しても結果は変わらない。** 権限判定は決定的で、同じ呼び出しを3回叩いても
-> 同じ理由で3回拒否されるだけで、run とトークン枠を無駄にする。
-> 衝突（`mergeable: false`）も再試行では直らない。だから**1回で判断する。**
+> 呼び出すと実害もあった。PR 作成と merge を1回の Bash にまとめた run では
+> **PR 作成ごと拒否され**、PR の有無を確かめる読み取りまで同じ理由で止められた（PR #34）。
+> 拒否は「結果」に対して掛かるので、分割・別ツール・MCP で言い換えても通らない。迂回しないこと。
 >
-> GitHub 側の auto-merge も代わりにはならない。このリポジトリは private かつ無料プランで、
-> 前提になるブランチ保護と必須チェックを有効化できない
-> （`GET /branches/main/protection` が 403 `Upgrade to GitHub Pro`）。
->
-> **ただし「必ず拒否される」と決めつけない。** 拒否が記録されているのは PR #27 の1件だけで、
-> `daily-2026-10-05` の PR #17 が未マージだった理由は記録が無く**分かっていない**
-> （ログ追記の手順がまだ無かった）。権限の状況が変われば通る可能性があるので、
-> 呼び出し自体は残す。1回で済むので無駄も小さい。
-
-**`MERGED=no` のときは、諦めた事実を記録する。**
-
-1. `daily/_log/$DATE.md` の末尾に「マージできなかった旨とエラー本文」を追記する
-2. `git commit` して `git push`（**ブランチはそのまま。PR は作り直さない**）
-3. Step 6 の通知にも書く
-
-> **Step 4 でログを書いた時点ではマージ結果はまだ分からない。**
-> だからマージを諦めたときだけ、ログに1回だけ追記して push する。
-> **この追記があったおかげで PR #27 の拒否理由が分かった。**
-> 省くと「PR が残っているが理由がどこにも無い」状態になる（PR #17 がまさにそれだった）。
-
-マージできた場合、ブランチはリポジトリ設定（`delete_branch_on_merge`）で自動削除される。
-できなかった場合も成果物は PR に残るので失われない。
+> PR #17 の未マージ理由を「記録が無く分からない」としていたのは誤りだった。
+> 当時の run の記録と PR 本文に同じ `Merge Without Review` の拒否が残っている。
 
 ## Step 6. 通知
 
-`PushNotification` で結果を知らせる。成功したジョブ数・失敗したジョブ・PR 番号と、
-**マージできたかどうか**を1〜2文で。できなかったらその理由も。
+`PushNotification` で結果を知らせる。成功したジョブ数・失敗したジョブ・PR 番号を1〜2文で。
+**人間のマージ待ちである**ことも書く。
 
 ---
 
@@ -194,13 +165,13 @@ echo "merged=$MERGED"
 | 全ジョブが失敗 | 実行ログだけをコミットして PR を作る。沈黙しない |
 | push が拒否された | ブランチ名が `claude/` 始まりか確認する |
 | PR 作成が失敗 | push 済みなので成果物は残る。通知とログに書いて終える |
-| マージが拒否された | **再試行しない。** エラー本文をログに追記して push し、PR を残して人間に渡す |
 
 ## 禁止事項
 
 - Issue を作る・触る・コメントすること
 - PR 本文に `Closes #N` を書くこと（無関係な Issue を閉じてしまう）
 - `main` へ直接 push すること
+- **PR をマージすること。** マージ API・MCP の merge・auto-merge の有効化のいずれも使わない
 - 成果物を捏造すること。件数合わせのために中身の薄い項目を足すこと
 - 読んでいない記事を要約すること
 - 半端な成果物を残すこと（失敗したジョブのファイルは消す）
