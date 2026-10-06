@@ -1,0 +1,2 @@
+{"issue":30,"mode":"pipeline","usecase":"ideation","slug":"0030-event-motivation","branch":"claude/loop-30-event-motivation","phase":"done","iteration":1,"max_iterations":5,"pr":31,"artifacts":["report.md"],
+"history":[{"n":1,"kind":"plan","by":"claude","at":"2026-10-06"},{"n":2,"kind":"work","by":"claude","at":"2026-10-06"},{"n":3,"kind":"review","by":"gemini:review","at":"2026-10-06","verdict":"PASS","cost_usd":0.0016}]}
