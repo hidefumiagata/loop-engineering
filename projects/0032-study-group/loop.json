@@ -1,0 +1,40 @@
+{
+  "issue": 32,
+  "usecase": "deliberation",
+  "mode": "panel",
+  "phase": "propose",
+  "panel_round": 1,
+  "iteration": 1,
+  "max_iterations": 5,
+  "slug": "0032-study-group",
+  "branch": "claude/loop-32-claude-study-group",
+  "pr": null,
+  "artifacts": [
+    "answer.md",
+    "synthesis-check.json"
+  ],
+  "history": [
+    {
+      "n": 1,
+      "kind": "brief",
+      "by": "claude",
+      "at": "2026-10-06T12:40:00Z",
+      "cost_usd": 0.0007
+    },
+    {
+      "n": 2,
+      "kind": "propose-partial",
+      "by": "claude+openai",
+      "at": "2026-10-06T13:00:00Z",
+      "cost_usd": 0.3279
+    },
+    {
+      "n": 3,
+      "kind": "propose-blocked",
+      "by": "claude",
+      "at": "2026-10-06T17:03:37.284Z",
+      "cost_usd": 0
+    }
+  ],
+  "updated_at": "2026-10-06T13:05:08.745Z"
+}
