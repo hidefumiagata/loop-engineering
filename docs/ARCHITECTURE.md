@@ -36,7 +36,7 @@ Claude Cloud Routine "loop-engine" ───────────────
 | 入力 | GitHub Issue（`loop` ラベル） | `loop/jobs/*.md` の定義 |
 | 終わり方 | 受入基準を満たすまで反復 | 1 run で完結。反復しない |
 | 状態 | Issue の状態コメント | **持たない。** 毎回ゼロから作る |
-| PR | 人間がマージする | **マージを1回試す**（拒否されたら人間へ） |
+| PR | 人間がマージする | 人間がマージする（**マージ API を呼ばない**） |
 | 許可ツール | + `Agent`（調査のサブエージェント） | Web と git だけ |
 
 **分けた理由**: 定期ジョブには「目的を達成したか」という判定が無い。
@@ -47,41 +47,69 @@ Claude Cloud Routine "loop-engine" ───────────────
 定期ジョブは Issue を**作らない・触らない・コメントしない**。
 PR 本文に `Closes #N` を書くことも禁じている（無関係な Issue を閉じてしまうため）。
 
-### daily-jobs のマージは「1回試して、駄目なら記録して人間へ」
+### daily-jobs はマージしない。PR を作って人間に渡す
 
 | 事実 | 出典 |
 | --- | --- |
-| PR #27 のマージは**ハーネスが拒否した**。Claude Code の auto-mode 権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める | `daily/_log/2026-10-06.md` の「マージ結果」節（run が自分で記録した） |
-| PR #17 も未マージで残ったが、**理由は記録が無く分かっていない**。ログ追記の手順がまだ無かった | `daily/_log/2026-10-05.md` にマージに関する記述が無い。最終的に人間が手でマージした |
-| `permissions.allow` では緩和できない | 拒否理由が「レビューが無い」であり、ツールの許可不足ではない |
-| GitHub 側の auto-merge は代わりにならない | 前提のブランチ保護と必須チェックを有効化できない。private かつ無料プランのため `GET /branches/main/protection` が 403 `Upgrade to GitHub Pro` |
+| 自動マージは**3回の run すべてでハーネスが拒否した**（PR #17・#27・#34）。Claude Code の auto モードの権限分類器が `Merge Without Review` と判定し、GitHub API に届く前に止める | 各 run のセッション記録（`permission_denied` / `decision_reason_type: classifier`）、PR #17 の本文、`daily/_log/2026-10-06.md` |
+| 判定条件は **人間の approve が無い PR のマージ**。protected branch かどうかは見ていない（このリポジトリの `main` は保護無しで、PR #34 は `mergeable_state: clean` だった） | [permission-modes](https://code.claude.com/docs/en/permission-modes)「Merging a pull request no human has approved, approving Claude's own pull request, or disabling CI checks」 |
+| routine には権限モードを選ぶ手段が無く、auto モードで動く | [routines](https://code.claude.com/docs/en/routines)「there is no permission-mode picker」。セッションのタグ `routine:auto-mode-forced` |
+| 過去の daily PR（#17・#27・#34）はすべて人間が手でマージした | GitHub の merged_at が run 終了の数時間後 |
+| GitHub 側の auto-merge は代わりにならない | private かつ無料プランのためブランチ保護を有効化できない（`GET /branches/main/protection` が 403 `Upgrade to GitHub Pro`） |
 
-**拒否が確認できているのは1件だけ**なので、「必ず拒否される」とは言えない。
-一方で権限判定は決定的なので、拒否された同じ呼び出しを**再試行しても結果は変わらない**。
-衝突（`mergeable: false`）も再試行では直らない。
+「PR を作ってすぐ自分でマージする」は、分類器の判定条件にそのまま当たる。
+呼び出しを残すと実害もあった。PR 作成と merge を1回の Bash にまとめた run では PR 作成ごと拒否された（PR #34）。
 
-そこで **1回だけ試し、結果を必ずログに記録する**設計にした。
+そこで **daily-jobs はマージ API を呼ばず、PR を作って通知するところで終える**。loop-engine と同じ扱いである。
 
-- 通れば自動で入る。権限の状況が変われば、手順を直さずにそのまま通るようになる
-- 通らなければ1 API 呼び出しの損で済み、**理由が `daily/_log/` に残る**
-- 再試行はしない。run とトークン枠を無駄にするだけである
-
-この「結果を記録する」部分が実際に効いた。PR #17 のときは記録が無かったので
-未マージの理由が分からず、PR #27 では記録があったので一度で原因が特定できた。
+> 以前は「拒否が確認できたのは PR #27 の1件だけで、PR #17 の理由は分からない」として
+> 「1回だけ試す」設計にしていたが、PR #17 の拒否も記録に残っており、前提が誤っていた。
+>
+> 自動マージに戻すなら、分類器の判定を `autoMode` 設定で例外にする必要がある
+> （[auto-mode-config](https://code.claude.com/docs/en/auto-mode-config)）。安全装置を意図的に緩める判断であり、
+> routine でその設定が効くかも未確認なので、エージェントの判断ではやらない。
 
 ### 出力上限は階層ごとの制約として config に持つ
 
-プロキシの約30秒制限（下表）に対し、上限の正解は**同期か非同期かで逆を向く**。
+エージェントプロキシは、**応答ヘッダ（最初のバイト）が約30秒届かないと 502 `upstream request failed` を返す**。
+総所要の制限ではない。だから上限の正解は呼び方（非ストリーミング／ストリーミング／非同期）で変わる。
 
-| 階層 | `background` | `max_output_tokens` | 理由 |
+| 階層 | 呼び方 | `max_output_tokens` | 理由 |
 | --- | --- | --- | --- |
-| `openai:propose` | `true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
-| `gemini:propose` | なし | 8000 | 同期。30秒内に返しきる必要がある。16000 にしたら 502 で合議が propose から進めなくなった（Issue #25） |
+| `openai:propose` | `background: true` | 16000 | 非同期なので長くてよい。8000 では `gpt-5.5` が打ち切られた（Issue #10: 出力 10,705 / 15,612 トークン） |
+| `gemini:propose` | `stream: true` | 16000 | 最初のチャンクでヘッダが返るので長くてよい |
+| `gemini:review` | `stream: true` | 8000 | 短い生成なので壁には当たらないが、揃えておく |
 
-この非対称を手順書の散文で管理すると必ずずれる。実際に一度ずれて Issue #25 を止めた。
-だから数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、
-`ask-llm.mjs` がそこから読む。手順書は `--max-output-tokens` を渡さない。
-wiring テストが「`background` の無い階層は 8000 以下」を強制する。
+数字は `loop/config.json` の `tiers.*.max_output_tokens` だけに置き、`ask-llm.mjs` がそこから読む。
+手順書は `--max-output-tokens` を渡さない。
+
+> **解決済み: `gemini:propose` の 502 は「最初のバイトまで約30秒」の壁だった（2026-10-06 実測）。**
+>
+> 以前は非ストリーミングで呼んでおり、全文を生成し終えるまでヘッダが返らなかった。
+> 生成速度は約89トークン/秒なので、30秒以内に返せるのは約2,600トークンまで。
+> 提案（4,800〜6,300トークン）が通っていたのは、モデルが短く書いた回だけだった。
+> 上限 8000 と 16000 のどちらでも成功と失敗があったのはこのため（上限は判別変数ではなかった）。
+>
+> 別々の2系統で独立に調べ、同じ結論になった。
+>
+> | 呼び方 | 最初のバイト | 総所要 | 結果 |
+> | --- | --- | --- | --- |
+> | 非ストリーミング（既定 thinking / low） | 30.4秒 | 30.4秒 | 502（4/4） |
+> | ストリーミング・既定 thinking | 12.8〜27.5秒（30秒超で 502 の回あり） | 59〜167秒 | 成功 6 / 502 1 |
+> | ストリーミング・`thinkingLevel: low` | 1.6〜4.0秒 | 21〜144秒 | 成功（8/8） |
+> | ストリーミング・`includeThoughts: true` | 2.1〜5.1秒 | 59〜182秒 | 成功（3/3）。思考が上限に算入され MAX_TOKENS になりやすい |
+>
+> - 502 は **Google ではなくプロキシ側**が生成している。本文が23バイトの平文（`text/plain`・Go の `http.Error` の形）で、
+>   Google の応答に必ず付く `Server-Timing` が無い。Google のエラーは JSON で返る。
+> - 一般のホスト（httpbin）ではヘッダまで35秒待っても切れなかった。**壁は credential を付与する経路に固有**とみられる。
+> - ヘッダ受信後の無通信上限は Gemini 経路では未検証（最大無通信は3.2秒しか作れなかった）。
+> - `thinkingLevel: minimal` は `gemini-3.8-flash` では 400 になる。
+> - **残るリスク:** 思考中は1バイトも流れないので、既定の thinking では最初のバイトまで 12.8〜27.5秒かかり、
+>   30秒を越えて 502 になった回が1回あった。thinking は品質に関わるので既定のままにしている。
+>   頻発するようなら `*.error.json` の `ttfb_sec` を集めて対策を検討する。
+>
+> **切り分けは `node loop/bin/doctor.mjs --latency` で行う。** 最初のバイトまでの秒数と総所要を分けて出す。
+> `--no-stream` で旧方式と比較できる。`ask-llm.mjs` も `*.meta.json` / `*.error.json` に `ttfb_sec` を残す。
 
 ## なぜ GitHub Actions ではないのか
 
@@ -130,8 +158,8 @@ wiring テストが「`background` の無い階層は 8000 以下」を強制す
 | routine は clone したリポジトリ内の skill を読んで実行できる | [routines](https://code.claude.com/docs/en/routines) | ループ手順そのものを `.claude/skills/loop-engine/SKILL.md` で版管理 |
 | Claude は `claude/` 接頭辞のブランチに常に push できる | 同上 | ブランチ名を `claude/loop-<n>-<slug>` に固定 |
 | **他社LLMはサンドボックスのファイル・コマンド・Webに触れない**（REST単発のみ） | 設計上の帰結 | panel の公平性を共有ブリーフで担保（後述） |
-| **エージェントプロキシは1リクエスト約30秒で諦め、502 `upstream request failed` を返す** | 3回目の実測。`gpt-5.2` も `gpt-5.5` も同じ30秒で落ちた。Gemini Flash は当初成功していたが、出力上限を 8000→16000 に上げた途端 502 になった（Issue #25）。**モデルではなく生成の長さが効く** | 長文を生成する `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。`reasoning_effort` を下げるだけでは生成そのものが長い場合に足りない |
-| **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを無視する**（`NODE_USE_ENV_PROXY` は Node 24 以降、サンドボックスは Node 22） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
+| **エージェントプロキシは応答ヘッダ（最初のバイト）を約30秒待って届かないと 502 `upstream request failed` を返す。総所要の制限ではない** | 実測（公式ドキュメントに記述は無い）。502 の本文と欠けているヘッダからプロキシ側の生成と判断。ストリーミングでは 182秒の生成も通った（前述） | `openai:propose` は `background: true` で非同期化し、短い GET のポーリングで取りに行く。Gemini は `stream: true`（SSE）で最初のチャンクを早く返し |
+| **サンドボックスは `HTTPS_PROXY` 環境変数でエージェントプロキシを指しており、API credential のキーはそこで付与される。Node の `fetch` はこれを既定で無視する**（`NODE_USE_ENV_PROXY=1` を付ければ Node 22.21 以降は見るが、付け忘れが黙ってキー無しのリクエストになる） | 2回目の run の実測。同一リクエストが curl で 200、Node fetch で 403 | `ask-llm.mjs` の転送を **curl に一本化**した。fetch に戻すと「credential を登録したのに 403」が再発する |
 | **クラウドセッションからは GitHub GraphQL が 403 で拒否される**（`"GitHub GraphQL is not available from Claude Code sessions; use the REST API"`） | 初回 run の実測 | `gh` の `--json` 系サブコマンドが全滅する。GitHub 操作をすべて `gh api`（REST）に寄せた（後述） |
 | **セッションは `main` ではなく自動生成の `claude/<形容詞>-<名前>` ブランチで始まることがある** | 初回 run の実測 | ブートストラップで無条件に `git checkout -B claude/loop-<n>-<slug> origin/main` する |
 
@@ -360,8 +388,9 @@ Claude だけがファイル・git・gh・Web を触れる。他2者は REST の
 **コストを抑えたいなら締めるべきはモデルの単価ではなく出力長である。**
 ただし `max_output_tokens` で削るのは筋が悪い。下げて打ち切ると再実行になり、
 **打ち切られた1回目の課金は `*.meta.json` に残らないまま消える**（Issue #10 の改稿で実際に起きた）。
-逆に同期階層で上げると約30秒のプロキシ制限に当たって 502 になる（Issue #25）。
-**上限は「出力を短くする道具」ではなく、同期／非同期の制約である**（前述の表）。
+逆に非ストリーミングの同期階層で上げると、最初のバイトが約30秒届かず 502 になる（Issue #25）。
+**上限は「出力を短くする道具」ではなく、呼び方の制約である**（前述の表）。
+`gemini:propose` の上限 16000 は1呼び出しあたり最大 $0.06（出力 $3.75/1M）。実測の出力は 5,000〜6,000 トークンで、ほぼ上限まで使うことは無い。
 出力を短くしたいなら `proposer.md` / `reviser.md` の語数指示を締めるか、
 `reasoning_effort` を下げる。
 

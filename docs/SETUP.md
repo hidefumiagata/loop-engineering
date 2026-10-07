@@ -330,7 +330,7 @@ panel は4段（propose → challenge → revise → synthesize）で、`preset:
 
 | 症状 | 原因と対処 |
 | --- | --- |
-| **502 `upstream request failed`（30秒前後で発生）** | エージェントプロキシのタイムアウト。`loop/config.json` の該当階層に `background: true` を付けて非同期化する。モデルを変えても直らない |
+| **502 `upstream request failed`（30秒前後で発生）** | エージェントプロキシが最初のバイトを約30秒待って諦めている（総所要の制限ではない）。`loop/config.json` の該当階層に、Gemini なら `stream: true`、OpenAI なら `background: true` を付ける。ストリーミングでも出るのは、思考が長く最初のチャンクが30秒に間に合わなかった場合（思考中は1バイトも流れない）。`*.error.json` の `ttfb_sec` と `node loop/bin/doctor.mjs --latency` で切り分けられる。モデルを変えても直らない |
 | **モデル名で 404（`is not found for API version` 等）** | `node loop/bin/doctor.mjs --models` で実際に使えるモデル名を列挙し、そこから `loop/config.json` の `providers.*.tiers.*.model` を直す。資料や記憶から書くと外れる |
 | **他社LLM が呼べない（原因が分からない）** | **まず `node loop/bin/doctor.mjs` を実行する。** Node fetch と curl の両方で叩いて「キー未付与 / キー無効 / ネットワーク拒否 / プロキシ非経由」を切り分ける。キーの値は出力しないのでそのまま共有してよい |
 | `403` + `x-deny-reason: host_not_allowed` | `loop-env` の Network access が Trusted のまま、または credential のホスト指定が違う |

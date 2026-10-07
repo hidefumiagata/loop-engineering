@@ -158,8 +158,8 @@ test('クラウドで 403 になる GraphQL 経路の gh コマンドを使っ�
 test('ask-llm.mjs は他社LLMの呼び出しに Node の fetch を使っていない', () => {
   // 実測: Claude Cloud は HTTPS_PROXY 環境変数でエージェントプロキシを指しており、
   // API credential のキーはそのプロキシが付与する。Node の fetch(undici) は
-  // HTTPS_PROXY を既定で無視するため（NODE_USE_ENV_PROXY は Node 24 以降・
-  // サンドボックスは Node 22）、プロキシを素通りしてキーの付かないリクエストが届く。
+  // HTTPS_PROXY を既定で無視するため、プロキシを素通りしてキーの付かないリクエストが届く。
+  // （NODE_USE_ENV_PROXY=1 で Node 22.21 以降は env proxy を見るが、付け忘れが黙って事故になる。）
   // 同一リクエストが curl では 200、Node fetch では 403/401 になることを確認している。
   // ここで fetch に戻すと、また「credential を登録したのに 403」で数時間溶かすことになる。
   const src = read('loop/bin/ask-llm.mjs');
@@ -311,13 +311,13 @@ test('状態コメントが成果物へのリンクを持つ', () => {
 });
 
 test('長文を生成する propose 階層は background で非同期化されている', () => {
-  // 実測: エージェントプロキシは1リクエスト約30秒で諦め、
+  // 実測: エージェントプロキシは最初のバイトを約30秒待って届かないと
   // 502 "upstream request failed" を返す（gpt-5.2 も gpt-5.5 も同じ30秒で落ちた）。
-  // 提案は数千トークンの生成なので同期リクエストでは原理的に収まらない。
+  // 提案は数千トークンの生成なので、非ストリーミングの同期リクエストでは原理的に収まらない。
   // background を外すと合議が propose で止まる。
   const t = config.providers.openai.tiers.propose;
   assert.equal(t.background, true, 'openai:propose の background を外してはならない');
-  // 他プロバイダは background 非対応。収まる範囲で使う前提なので強制しない。
+  // Gemini は background 非対応。代わりに stream: true で壁を越える。
   assert.notEqual(config.providers.gemini.tiers.propose.background, true,
     'Gemini に background は無い。付けると送信ボディに未知のフィールドが混じる');
 });
@@ -533,9 +533,10 @@ test('blocked はラベルで表し、state.phase には書かない', () => {
 });
 
 test('出力上限が同期/非同期の制約と整合している', () => {
-  // エージェントプロキシは1リクエスト約30秒で諦めて 502 を返す（実測）。
-  //   - 同期呼び出し（background 無し）は30秒内に返しきる必要があり、上限を上げられない。
-  //     実測: gemini:propose を 16000 にしたら 502 で合議が propose から進めなくなった（Issue #25）。
+  // エージェントプロキシは最初のバイトを約30秒待って届かないと 502 を返す（実測）。総所要の制限ではない。
+  //   - 非ストリーミングの同期呼び出しは全文を生成し終えるまで最初のバイトが返らないので、上限を上げられない。
+  //     実測: gemini:propose を非ストリーミングで 16000 にしたら 502 で合議が止まった（Issue #25）。
+  //   - ストリーミング（stream: true）は最初のチャンクで返るので上限を上げてよい。
   //   - 非同期（background: true）はポーリングで取るので上限を上げてよい。
   //     実測: openai:propose を 8000 にすると gpt-5.5 が打ち切られる（Issue #10）。
   // この非対称を散文で管理すると必ずずれるので、config を正にして機械で縛る。
@@ -545,10 +546,10 @@ test('出力上限が同期/非同期の制約と整合している', () => {
       const cap = tier.max_output_tokens;
       assert.ok(Number.isInteger(cap) && cap > 0,
         `${pname}:${tname} に max_output_tokens が無い。呼び出し側が数字を書くと散文とずれる`);
-      if (tier.background === true) continue;
+      if (tier.background === true || tier.stream === true) continue;
       assert.ok(cap <= SYNC_CAP,
-        `${pname}:${tname} は同期呼び出し（background 無し）なのに max_output_tokens=${cap}。`
-        + ` 約30秒のプロキシ制限を超えて 502 になる。${SYNC_CAP} 以下にするか background: true にすること`);
+        `${pname}:${tname} は非ストリーミングの同期呼び出しなのに max_output_tokens=${cap}。`
+        + ` 最初のバイトが約30秒届かず 502 になる。${SYNC_CAP} 以下にするか stream / background を付けること`);
     }
   }
 });
