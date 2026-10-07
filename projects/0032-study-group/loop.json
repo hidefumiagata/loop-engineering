@@ -2,13 +2,13 @@
   "issue": 32,
   "usecase": "deliberation",
   "mode": "panel",
-  "phase": "synthesize",
+  "phase": "done",
   "panel_round": 1,
   "iteration": 1,
   "max_iterations": 5,
   "slug": "0032-study-group",
   "branch": "claude/loop-32-claude-study-group",
-  "pr": null,
+  "pr": 37,
   "artifacts": [
     "answer.md",
     "synthesis-check.json"
@@ -55,7 +55,13 @@
       "by": "claude+gemini+openai",
       "at": "2026-10-07T02:04:12.052Z",
       "cost_usd": 0.4274
+    },
+    {
+      "n": 7,
+      "kind": "synthesize",
+      "by": "panel-synthesizer",
+      "at": "2026-10-07T03:03:25.649Z"
     }
   ],
-  "updated_at": "2026-10-07T01:03:36.259Z"
+  "updated_at": "2026-10-07T03:03:25.649Z"
 }
