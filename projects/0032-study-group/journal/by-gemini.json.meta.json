@@ -1,0 +1,21 @@
+{
+  "provider": "gemini",
+  "tier": "propose",
+  "model": "gemini-3.8-flash",
+  "schema": "challenge",
+  "usage": {
+    "input_tokens": 8053,
+    "output_tokens": 2515,
+    "candidates_tokens": 1422,
+    "thoughts_tokens": 1093
+  },
+  "cost_usd": 0.015471,
+  "truncated": false,
+  "dry_run": false,
+  "elapsed_sec": 27,
+  "ttfb_sec": 13.9,
+  "stream": true,
+  "attempts": 1,
+  "max_output_tokens": 16000,
+  "at": "2026-10-07T01:02:01.916Z"
+}
