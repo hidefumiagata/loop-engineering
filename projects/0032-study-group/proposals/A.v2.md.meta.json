@@ -1,0 +1,19 @@
+{
+  "provider": "openai",
+  "tier": "propose",
+  "model": "gpt-5.5",
+  "schema": null,
+  "usage": {
+    "input_tokens": 9202,
+    "output_tokens": 11768
+  },
+  "cost_usd": 0.39905,
+  "truncated": false,
+  "dry_run": false,
+  "elapsed_sec": 89,
+  "ttfb_sec": 1.6,
+  "stream": false,
+  "attempts": 1,
+  "max_output_tokens": 16000,
+  "at": "2026-10-07T02:03:57.462Z"
+}
