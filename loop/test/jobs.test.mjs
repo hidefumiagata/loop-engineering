@@ -138,3 +138,61 @@ test('daily-jobs はマージしない', () => {
   // 理由を手順書に残す（次に「試してみよう」と戻されないように）
   assert.match(skill, /Merge Without Review/, '拒否理由が書かれていない');
 });
+
+// ---- 脆弱性レポートのジョブ（paloalto / gitlab） ----
+//
+// 脆弱性情報は誤ると実害が出る。件数を埋めるための捏造と、
+// 深刻度や影響バージョンの言い換えを、定義の文言として縛る。
+
+test('脆弱性レポートのジョブが定義されている', () => {
+  const jobs = loadJobs(JOBS_DIR, { all: true });
+  const ids = jobs.map((j) => j.id);
+  for (const id of ['paloalto-advisories', 'gitlab-advisories']) {
+    assert.ok(ids.includes(id), `${id} が無い`);
+  }
+});
+
+test('脆弱性レポートは0件を正常な結果として扱う', () => {
+  // セキュリティリリースは毎日は出ない。0件のときに
+  // 24時間より古いものを混ぜて件数を埋めるのが最も危険な失敗
+  const jobs = loadJobs(JOBS_DIR, { all: true })
+    .filter((j) => j.id.endsWith('-advisories'));
+  assert.ok(jobs.length >= 2, `対象ジョブが ${jobs.length} 件しかない`);
+  for (const j of jobs) {
+    assert.match(j.body, /0件は正常な結果である/, `${j.id}: 0件を正常と明示していない`);
+    assert.match(j.body, /件数を埋めるために24時間より古いものを混ぜてはならない|件数を埋めるために24時間より古いリリースを混ぜてはならない/,
+      `${j.id}: 件数の捏造を禁じていない`);
+    assert.match(j.body, /\*\*0件と書く\*\*/, `${j.id}: 0件を曖昧に書かせない明示が無い`);
+  }
+});
+
+test('脆弱性レポートは一次情報の表記をそのまま写させる', () => {
+  const jobs = loadJobs(JOBS_DIR, { all: true })
+    .filter((j) => j.id.endsWith('-advisories'));
+  for (const j of jobs) {
+    assert.match(j.body, /そのまま写す/, `${j.id}: 表記をそのまま写す指示が無い`);
+    assert.match(j.body, /丸めない/, `${j.id}: 丸めることを禁じていない`);
+    assert.match(j.body, /自分で判断し直さない/, `${j.id}: 深刻度を再判定させない指示が無い`);
+    // 読んでいないものを要約させない（daily-jobs 共通の規律）
+    assert.match(j.body, /未読/, `${j.id}: 未読を明記させる指示が無い`);
+    // CVE と深刻度と影響バージョンが成果物テンプレートに入っていること
+    for (const field of ['CVE', '深刻度', '影響バージョン']) {
+      assert.ok(j.body.includes(field), `${j.id}: 成果物に ${field} が無い`);
+    }
+  }
+});
+
+test('脆弱性レポートが一次情報の URL を明示している', () => {
+  // 出典を間違えると実害が出る。定義に URL を書いておき、
+  // run が検索で当てずっぽうに拾わないようにする
+  const jobs = Object.fromEntries(
+    loadJobs(JOBS_DIR, { all: true }).map((j) => [j.id, j.body]),
+  );
+  assert.match(jobs['paloalto-advisories'], /security\.paloaltonetworks\.com\/json/,
+    'Palo Alto の JSON エンドポイントが書かれていない');
+  assert.match(jobs['gitlab-advisories'], /docs\.gitlab\.com\/releases\/patch-releases\.xml/,
+    'GitLab の移転先 Atom フィードが書かれていない');
+  // 旧 URL を主たる取得先にしていないこと（301 で移転済み）
+  assert.match(jobs['gitlab-advisories'], /301 で移転/,
+    'GitLab の旧 URL が移転済みである注意書きが無い');
+});

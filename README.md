@@ -23,6 +23,11 @@ Issue を書く  →  定期実行が着手  →  作業  →  別モデルが�
 | --- | --- | --- |
 | `hackernews-top10` | HN トップ10記事の日本語要約 | `daily/hackernews-top10/YYYY-MM-DD.md` |
 | `ai-news-5` | 世界のAIニュース5点の日本語要約 | `daily/ai-news-5/YYYY-MM-DD.md` |
+| `paloalto-advisories` | Palo Alto Networks の新規脆弱性（24時間以内） | `daily/paloalto-advisories/YYYY-MM-DD.md` |
+| `gitlab-advisories` | GitLab の新規脆弱性（24時間以内） | `daily/gitlab-advisories/YYYY-MM-DD.md` |
+
+脆弱性レポートは**該当0件が正常な結果**である。セキュリティリリースは毎日は出ないので、
+件数を埋めるために期間外のものを混ぜない規律を定義側で縛っている。
 
 ジョブを足すときは `loop/jobs/` に MD を1枚置くだけ。`enabled: false` で止められる。
 
