@@ -1,1 +1,17 @@
-{"issue":39,"usecase":"research","mode":"pipeline","slug":"0039-claude-sast","branch":"claude/loop-39-claude-sast","phase":"work","iteration":1,"max_iterations":5,"artifacts":[],"history":[{"n":1,"kind":"plan","by":"claude+gemini:review","at":"2026-10-08T01:00:00Z","cost_usd":0.0009}]}
+{
+  "issue": 39,
+  "usecase": "research",
+  "mode": "pipeline",
+  "slug": "0039-claude-sast",
+  "branch": "claude/loop-39-claude-sast",
+  "phase": "review",
+  "iteration": 1,
+  "max_iterations": 5,
+  "pr": 40,
+  "artifacts": ["report.md", "sources.md"],
+  "history": [
+    {"n": 1, "kind": "plan", "by": "claude+gemini:review", "at": "2026-10-08T01:00:00Z", "cost_usd": 0.0009},
+    {"n": 2, "kind": "work", "by": "claude+research-community+research-reconcile", "at": "2026-10-08T02:09:43Z"}
+  ],
+  "updated_at": "2026-10-08T02:09:43Z"
+}
